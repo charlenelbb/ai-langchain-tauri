@@ -1,0 +1,12 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "dictionaryDefinitions": [],
+  "dictionaries": ["en_US"],
+  "words": [
+    "aiapp",
+    "pnpm",
+    "langchain",
+    "tauri"
+  ]
+}
