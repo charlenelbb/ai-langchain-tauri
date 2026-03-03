@@ -15,6 +15,7 @@ function App() {
   const [medicalFile, setMedicalFile] = useState<File | null>(null);
   const [medicalResult, setMedicalResult] = useState('');
   const [isMedicalLoading, setIsMedicalLoading] = useState(false);
+  const [promptTemplate, setPromptTemplate] = useState('detailed'); // 添加 prompt 模板选择
 
   async function greet() {
     // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -83,7 +84,8 @@ function App() {
     setMedicalResult('');
 
     const form = new FormData();
-    form.append('question', medicalQuestion);
+    const optimizedQuestion = optimizePrompt(medicalQuestion, promptTemplate);
+    form.append('question', optimizedQuestion);
     form.append('image', medicalFile);
 
     try {
@@ -97,6 +99,15 @@ function App() {
       setMedicalResult('请求失败');
     }
     setIsMedicalLoading(false);
+  }
+
+  function optimizePrompt(question: string, template: string): string {
+    const templates: Record<string, string> = {
+      detailed: `请详细分析以下医疗问题并提供建议：\n问题：${question}\n请提供：1. 可能的原因 2. 建议措施 3. 何时就医`,
+      concise: `医疗问题：${question}\n请简洁回答。`,
+      diagnostic: `患者描述：${question}\n请从诊断角度分析，包括可能的疾病和检查建议。`,
+    };
+    return templates[template] || question;
   }
 
   return (
@@ -172,6 +183,19 @@ function App() {
             <p className="whitespace-pre-wrap">{medicalResult}</p>
           </div>
         )}
+        <div className="mb-2">
+          <label className="block text-sm font-semibold mb-1">选择回答风格：</label>
+          <select
+            value={promptTemplate}
+            onChange={(e) => setPromptTemplate(e.target.value)}
+            className="border px-2 py-1 rounded mb-2"
+            disabled={isMedicalLoading}
+          >
+            <option value="detailed">详细分析</option>
+            <option value="concise">简洁回答</option>
+            <option value="diagnostic">诊断导向</option>
+          </select>
+        </div>
       </div>
     </div>
   );
