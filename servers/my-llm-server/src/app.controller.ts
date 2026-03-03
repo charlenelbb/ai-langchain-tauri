@@ -1,5 +1,15 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
-import { Response } from 'express';
+import {
+  Controller,
+  Get,
+  Query,
+  Res,
+  Post,
+  Body,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import type { Response } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AppService } from './app.service';
 
 @Controller()
@@ -57,6 +67,30 @@ export class AppController {
         `data: ${error instanceof Error ? error.message : '未知错误'}\n\n`,
       );
       res.end();
+    }
+  }
+
+  @Post('medical')
+  @UseInterceptors(FileInterceptor('image'))
+  async medical(
+    @UploadedFile() file: any,
+    @Body('question') question: string,
+    @Res() res: Response,
+  ) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (!file) {
+      return res.status(400).json({ error: '没有上传图片' });
+    }
+    try {
+      const answer = await this.appService.medicalAnalysis(
+        file.buffer,
+        question,
+      );
+      return res.json({ answer });
+    } catch (err) {
+      return res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : '处理失败' });
     }
   }
 }

@@ -10,6 +10,12 @@ function App() {
   const [sseQuery, setSseQuery] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
 
+  // 医疗问答状态
+  const [medicalQuestion, setMedicalQuestion] = useState('');
+  const [medicalFile, setMedicalFile] = useState<File | null>(null);
+  const [medicalResult, setMedicalResult] = useState('');
+  const [isMedicalLoading, setIsMedicalLoading] = useState(false);
+
   async function greet() {
     // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
     setGreetMsg(await invoke('greet', { name }));
@@ -68,6 +74,31 @@ function App() {
     }
   }
 
+  async function handleMedicalSubmit() {
+    if (!medicalQuestion.trim() || !medicalFile) {
+      alert('请提供问题内容并选择一张图片');
+      return;
+    }
+    setIsMedicalLoading(true);
+    setMedicalResult('');
+
+    const form = new FormData();
+    form.append('question', medicalQuestion);
+    form.append('image', medicalFile);
+
+    try {
+      const res = await fetch('http://localhost:3000/medical', {
+        method: 'POST',
+        body: form,
+      });
+      const data = await res.json();
+      setMedicalResult(data.answer || data.error || '无返回');
+    } catch (err) {
+      setMedicalResult('请求失败');
+    }
+    setIsMedicalLoading(false);
+  }
+
   return (
     <div className="p-6">
       <div className="mb-6">
@@ -111,7 +142,37 @@ function App() {
         )}
       </div>
 
-      <Button>hi</Button>
+      <div className="mb-6">
+        <h2 className="text-xl font-bold mb-2">医疗问答助手</h2>
+        <input
+          value={medicalQuestion}
+          onChange={(e) => setMedicalQuestion(e.target.value)}
+          placeholder="描述症状或问题"
+          className="border px-2 py-1 mr-2 rounded w-full mb-2"
+          disabled={isMedicalLoading}
+        />
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => {
+            setMedicalFile(e.target.files ? e.target.files[0] : null);
+          }}
+          className="mb-2"
+          disabled={isMedicalLoading}
+        />
+        <Button
+          onClick={handleMedicalSubmit}
+          disabled={isMedicalLoading}
+          className="bg-purple-500 hover:bg-purple-700 disabled:bg-gray-400"
+        >
+          {isMedicalLoading ? '正在分析...' : '提交医疗问题'}
+        </Button>
+        {medicalResult && (
+          <div className="mt-4 p-4 bg-gray-100 rounded border border-gray-300">
+            <p className="whitespace-pre-wrap">{medicalResult}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
