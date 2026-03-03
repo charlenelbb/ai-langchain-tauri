@@ -93,4 +93,52 @@ export class AppController {
         .json({ error: err instanceof Error ? err.message : '处理失败' });
     }
   }
+
+  // 接收训练数据并触发 LoRA 微调
+  @Post('lora/train')
+  @UseInterceptors(FileInterceptor('file'))
+  async loraTrain(
+    @UploadedFile() file: any,
+    @Body('model_name') modelName: string,
+    @Body('output_dir') outputDir: string,
+    @Body('num_train_epochs') numTrainEpochs: string,
+    @Body('per_device_train_batch_size') perDeviceTrainBatchSize: string,
+    @Body('learning_rate') learningRate: string,
+    @Body('lora_r') loraR: string,
+    @Body('lora_alpha') loraAlpha: string,
+    @Body('lora_dropout') loraDropout: string,
+    @Body('use_int8') useInt8: string,
+  ) {
+    if (!file) {
+      return { error: '没有上传训练文件' };
+    }
+
+    const params = {
+      modelName,
+      outputDir: outputDir || `./uploads/lora_${Date.now()}`,
+      numTrainEpochs: parseInt(numTrainEpochs || '3', 10),
+      perDeviceTrainBatchSize: parseInt(perDeviceTrainBatchSize || '4', 10),
+      learningRate: parseFloat(learningRate || '2e-4'),
+      loraR: parseInt(loraR || '8', 10),
+      loraAlpha: parseInt(loraAlpha || '32', 10),
+      loraDropout: parseFloat(loraDropout || '0.1'),
+      useInt8: useInt8 === 'true' || useInt8 === '1',
+    };
+
+    const jobId = await this.appService.startLoraTraining(
+      file.buffer,
+      file.originalname,
+      params,
+    );
+
+    return { jobId, outputDir: params.outputDir };
+  }
+
+  // 查询训练日志（返回整个日志内容）
+  @Get('lora/status')
+  async loraStatus(@Query('jobId') jobId: string) {
+    if (!jobId) return { error: 'missing jobId' };
+    const log = await this.appService.getTrainingLog(jobId);
+    return { jobId, log };
+  }
 }
