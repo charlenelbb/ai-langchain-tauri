@@ -7,6 +7,9 @@ import {
   Body,
   UploadedFile,
   UseInterceptors,
+  Param,
+  Delete,
+  Patch,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -58,6 +61,48 @@ export class AppController {
       }
 
       // 发送完成事件
+      res.write('event: done\n');
+      res.write('data: 流已完成\n\n');
+      res.end();
+    } catch (error) {
+      res.write('event: error\n');
+      res.write(
+        `data: ${error instanceof Error ? error.message : '未知错误'}\n\n`,
+      );
+      res.end();
+    }
+  }
+
+  // SSE with session context - 使用会话上下文的流式端点
+  @Get('sse/:sessionId')
+  async sseWithContext(
+    @Param('sessionId') sessionId: string,
+    @Query('query') query: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    try {
+      res.write('event: open\n');
+      res.write(`data: SSE连接已建立\n\n`);
+
+      // 获取会话的历史上下文
+      const context = await this.appService.getSessionContext(sessionId);
+      const promptWithContext = context
+        ? `上下文：\n${context}\n\n当前问题：${query}`
+        : query;
+
+      // 获取流式响应
+      const stream = this.appService.promptStream(promptWithContext);
+
+      for await (const chunk of stream) {
+        res.write('event: message\n');
+        res.write(`data: ${chunk}\n\n`);
+      }
+
       res.write('event: done\n');
       res.write('data: 流已完成\n\n');
       res.end();
@@ -140,5 +185,58 @@ export class AppController {
     if (!jobId) return { error: 'missing jobId' };
     const log = await this.appService.getTrainingLog(jobId);
     return { jobId, log };
+  }
+
+  // Sessions API - 后端持久化对话会话
+  @Get('sessions')
+  async listSessions() {
+    const sessions = await this.appService.listSessions();
+    return sessions.map((s) => ({
+      id: s.id,
+      title: s.title,
+      messages: s.messages,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+    }));
+  }
+
+  @Post('sessions')
+  async createSession(@Body('title') title: string) {
+    const s = await this.appService.createSession(title);
+    return s;
+  }
+
+  @Get('sessions/:id')
+  async getSession(@Param('id') id: string) {
+    const s = await this.appService.getSession(id);
+    if (!s) return { error: 'not_found' };
+    return s;
+  }
+
+  @Post('sessions/:id/messages')
+  async appendMessage(@Param('id') id: string, @Body() body: any) {
+    // body can contain { content } or { sender, text, timestamp? }
+    // Map content -> text, default sender to 'user' if not provided
+    const msg = {
+      sender: body.sender || 'user',
+      text: body.text || body.content,
+      timestamp: body.timestamp || Date.now(),
+    };
+    const s = await this.appService.appendMessage(id, msg);
+    if (!s) return { error: 'not_found' };
+    return s;
+  }
+
+  @Patch('sessions/:id')
+  async updateSession(@Param('id') id: string, @Body('title') title: string) {
+    const s = await this.appService.updateSessionTitle(id, title);
+    if (!s) return { error: 'not_found' };
+    return s;
+  }
+
+  @Delete('sessions/:id')
+  async deleteSession(@Param('id') id: string) {
+    const ok = await this.appService.deleteSession(id);
+    return { ok };
   }
 }

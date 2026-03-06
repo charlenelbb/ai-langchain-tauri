@@ -1,14 +1,30 @@
-import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useState, useEffect, useRef } from 'react';
 import './App.css';
 import { Button } from './components/ui/button';
 
+interface Session {
+  id: string;
+  title: string;
+  messages: Array<{ id: string; sender: 'user' | 'assistant'; text: string }>;
+  createdAt: number;
+  updatedAt: number;
+}
+
 function App() {
-  const [greetMsg, setGreetMsg] = useState('');
-  const [name, setName] = useState('');
-  const [sseMessage, setSseMessage] = useState('');
-  const [sseQuery, setSseQuery] = useState('');
+  // 对话状态（替换原来的 SSE 单次查询）
+  const [chatInput, setChatInput] = useState('');
+  const [messages, setMessages] = useState<
+    Array<{ id: string; sender: 'user' | 'assistant'; text: string }>
+  >([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingBotId, setStreamingBotId] = useState<string | null>(null);
+
+  // 会话持久化状态
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [showSessionList, setShowSessionList] = useState(false);
+
+  const messagesBufferRef = useRef<Record<string, string>>({});
 
   // 医疗问答状态
   const [medicalQuestion, setMedicalQuestion] = useState('');
@@ -29,61 +45,271 @@ function App() {
   const [batchSize, setBatchSize] = useState(4);
   const [learningRate, setLearningRate] = useState(0.0002);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke('greet', { name }));
+  // 初始化：从后端加载会话列表并恢复当前会话
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('http://localhost:3000/sessions');
+        if (!res.ok) throw new Error('failed');
+        const list = await res.json();
+        if (Array.isArray(list) && list.length > 0) {
+          setSessions(list);
+          const first = list[0];
+          setCurrentSessionId(first.id);
+          // load full session
+          const sRes = await fetch(
+            `http://localhost:3000/sessions/${first.id}`
+          );
+          if (sRes.ok) {
+            const s = await sRes.json();
+            setMessages(s.messages || []);
+          } else {
+            setMessages(first.messages || []);
+          }
+        } else {
+          // create a session if none
+          const createRes = await fetch('http://localhost:3000/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: '会话 1' }),
+          });
+          const s = await createRes.json();
+          setSessions([s]);
+          setCurrentSessionId(s.id);
+          setMessages([]);
+        }
+      } catch (err) {
+        console.error(
+          'Failed to load sessions from backend, falling back to empty',
+          err
+        );
+        setSessions([]);
+        setCurrentSessionId(null);
+        setMessages([]);
+      }
+    })();
+  }, []);
+
+  // 当 messages 改变时，更新当前会话的本地状态（后端已持久化）
+  useEffect(() => {
+    if (!currentSessionId) return;
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === currentSessionId
+          ? { ...s, messages, updatedAt: Date.now() }
+          : s
+      )
+    );
+  }, [messages, currentSessionId]);
+
+  // 会话由后端持久化，前端保持会话列表状态
+
+  // 创建新会话
+  function createNewSession() {
+    (async () => {
+      try {
+        const res = await fetch('http://localhost:3000/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: `会话 ${sessions.length + 1}` }),
+        });
+        const s = await res.json();
+        setSessions((prev) => [s, ...prev]);
+        setCurrentSessionId(s.id);
+        setMessages([]);
+      } catch (e) {
+        console.error('create session failed', e);
+      }
+    })();
   }
 
-  async function handleSSE() {
-    if (!sseQuery.trim()) {
-      alert('请输入查询内容');
-      return;
+  // 切换会话
+  function switchSession(sessionId: string) {
+    (async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/sessions/${sessionId}`);
+        if (!res.ok) throw new Error('not found');
+        const s = await res.json();
+        setCurrentSessionId(sessionId);
+        setMessages(s.messages || []);
+        setShowSessionList(false);
+      } catch (e) {
+        console.error('switch session failed', e);
+      }
+    })();
+  }
+
+  // 删除会话
+  function deleteSession(sessionId: string) {
+    (async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/sessions/${sessionId}`, {
+          method: 'DELETE',
+        });
+        const data = await res.json();
+        if (data.ok) {
+          const remaining = sessions.filter((s) => s.id !== sessionId);
+          setSessions(remaining);
+          if (currentSessionId === sessionId) {
+            if (remaining.length > 0) {
+              switchSession(remaining[0].id);
+            } else {
+              createNewSession();
+            }
+          }
+        }
+      } catch (e) {
+        console.error('delete session failed', e);
+      }
+    })();
+  }
+
+  // 更新会话标题
+  function updateSessionTitle(sessionId: string, newTitle: string) {
+    (async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/sessions/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+        const s = await res.json();
+        setSessions((prev) => prev.map((p) => (p.id === sessionId ? s : p)));
+      } catch (e) {
+        console.error('update title failed', e);
+      }
+    })();
+  }
+
+  // 发送用户消息并通过 SSE 接收带上下文的流式回复
+  async function handleSendChat() {
+    const text = chatInput.trim();
+    if (!text) return;
+
+    // 构造 user 消息并加入历史
+    const userMsg = {
+      id: String(Date.now()) + Math.random().toString(36).slice(2),
+      sender: 'user' as const,
+      text,
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setChatInput('');
+
+    // 确保当前会话存在（如不存在则在后端创建）并把用户消息持久化到后端
+    let sessionId = currentSessionId;
+    try {
+      if (!sessionId) {
+        const res = await fetch('http://localhost:3000/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: '会话' }),
+        });
+        const s = await res.json();
+        sessionId = s.id;
+        setCurrentSessionId(s.id);
+        setSessions((prev) => [s, ...prev]);
+      }
+      if (sessionId) {
+        await fetch(`http://localhost:3000/sessions/${sessionId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(userMsg),
+        });
+      }
+    } catch (e) {
+      console.warn('persist user message failed', e);
     }
 
     setIsStreaming(true);
-    setSseMessage('');
+
+    // 先在 UI 中添加一个空的 assistant 消息，用于填充流式内容
+    const botId = 'bot_' + Date.now() + Math.random().toString(36).slice(2);
+    setStreamingBotId(botId);
+    setMessages((prev) => [
+      ...prev,
+      { id: botId, sender: 'assistant', text: '' },
+    ]);
+    messagesBufferRef.current[botId] = '';
 
     try {
-      // 连接到 SSE 接口
-      const eventSource = new EventSource(
-        `http://localhost:3000/sse?query=${encodeURIComponent(sseQuery)}`
-      );
+      // 使用新的 SSE 端点，自动传入会话上下文（由后端处理）
+      const endpoint = sessionId
+        ? `http://localhost:3000/sse/${sessionId}?query=${encodeURIComponent(text)}`
+        : `http://localhost:3000/sse?query=${encodeURIComponent(text)}`;
 
-      // 处理开启事件
+      const eventSource = new EventSource(endpoint);
+
       eventSource.addEventListener('open', () => {
-        console.log('SSE 连接已建立');
+        // no-op
       });
 
-      // 处理消息事件
       eventSource.addEventListener('message', (event) => {
-        setSseMessage((prev) => prev + event.data);
+        const chunk = event.data;
+        // append to UI
+        setMessages((prev) =>
+          prev.map((m) => (m.id === botId ? { ...m, text: m.text + chunk } : m))
+        );
+        // append to buffer for final save
+        messagesBufferRef.current[botId] =
+          (messagesBufferRef.current[botId] || '') + chunk;
       });
 
-      // 处理完成事件
-      eventSource.addEventListener('done', () => {
-        console.log('SSE 流已完成');
+      eventSource.addEventListener('done', async () => {
+        // 在完成时，将最终助手文本写入后端会话
+        try {
+          const finalText = messagesBufferRef.current[botId] || '';
+          if (sessionId) {
+            await fetch(
+              `http://localhost:3000/sessions/${sessionId}/messages`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id: 'msg_' + Date.now(),
+                  sender: 'assistant',
+                  text: finalText,
+                }),
+              }
+            );
+          }
+        } catch (e) {
+          console.warn('persist assistant message failed', e);
+        }
         eventSource.close();
+        // 清理 buffer
+        delete messagesBufferRef.current[botId];
         setIsStreaming(false);
+        setStreamingBotId(null);
       });
 
-      // 处理错误事件
       eventSource.addEventListener('error', (event) => {
-        console.error('SSE 错误:', event);
-        setSseMessage((prev) => prev + '\n[错误] ' + (event as any).data);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === botId
+              ? { ...m, text: m.text + '\n[错误] ' + (event as any).data }
+              : m
+          )
+        );
         eventSource.close();
         setIsStreaming(false);
+        setStreamingBotId(null);
       });
 
-      // 连接打开失败
       eventSource.onerror = () => {
         if (eventSource.readyState === EventSource.CLOSED) {
           eventSource.close();
           setIsStreaming(false);
+          setStreamingBotId(null);
         }
       };
     } catch (error) {
-      console.error('SSE 错误:', error);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === botId ? { ...m, text: m.text + '\n[连接错误]' } : m
+        )
+      );
       setIsStreaming(false);
+      setStreamingBotId(null);
     }
   }
 
@@ -189,42 +415,149 @@ function App() {
   return (
     <div className="p-6">
       <div className="mb-6">
-        <h2 className="text-xl font-bold mb-2">常规问询</h2>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="输入名字"
-          className="border px-2 py-1 mr-2 rounded"
-        />
-        <button
-          type="submit"
-          onClick={greet}
-          className="text-white bg-blue-500 hover:bg-blue-700 font-bold py-2 px-4 rounded"
-        >
-          Greet
-        </button>
-        {greetMsg && <p className="mt-4 text-green-600">{greetMsg}</p>}
-      </div>
+        <h2 className="text-xl font-bold mb-2">
+          对话（支持上下文 + 流式回复）
+        </h2>
 
-      <div className="mb-6">
-        <h2 className="text-xl font-bold mb-2">SSE 实时通信</h2>
-        <input
-          value={sseQuery}
-          onChange={(e) => setSseQuery(e.target.value)}
-          placeholder="输入查询内容"
-          className="border px-2 py-1 mr-2 rounded w-full mb-2"
-          disabled={isStreaming}
-        />
-        <Button
-          onClick={handleSSE}
-          disabled={isStreaming}
-          className="bg-green-500 hover:bg-green-700 disabled:bg-gray-400"
-        >
-          {isStreaming ? '流式接收中...' : '开始 SSE 查询'}
-        </Button>
-        {sseMessage && (
-          <div className="mt-4 p-4 bg-gray-100 rounded border border-gray-300 max-h-96 overflow-auto">
-            <p className="whitespace-pre-wrap">{sseMessage}</p>
+        <div className="mb-2 p-3 bg-gray-50 rounded border border-gray-200 max-h-80 overflow-auto">
+          {messages.length === 0 ? (
+            <p className="text-sm text-gray-500">
+              尚无消息，输入内容开始对话。
+            </p>
+          ) : (
+            messages.map((m) => (
+              <div
+                key={m.id}
+                className={`mb-2 flex ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`${m.sender === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-900'} px-3 py-2 rounded-lg max-w-full`}
+                  style={{ whiteSpace: 'pre-wrap' }}
+                >
+                  {m.text ||
+                    (m.sender === 'assistant' &&
+                    isStreaming &&
+                    streamingBotId === m.id
+                      ? '正在生成回答...'
+                      : '')}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="说点什么...（回车发送）"
+            className="border px-2 py-1 rounded flex-1"
+            disabled={isStreaming}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSendChat();
+              }
+            }}
+          />
+          <Button
+            onClick={handleSendChat}
+            disabled={isStreaming}
+            className="bg-green-500 hover:bg-green-700"
+          >
+            {isStreaming ? '流式接收中...' : '发送'}
+          </Button>
+          <Button
+            onClick={() => {
+              setMessages([]);
+              setChatInput('');
+            }}
+            className="bg-gray-300 hover:bg-gray-400"
+          >
+            清空
+          </Button>
+        </div>
+
+        {/* 会话管理工具栏 */}
+        <div className="mt-2 flex gap-2 flex-wrap items-center">
+          <Button
+            onClick={() => setShowSessionList(!showSessionList)}
+            className="bg-indigo-500 hover:bg-indigo-700 text-sm"
+          >
+            会话列表 ({sessions.length})
+          </Button>
+          <Button
+            onClick={createNewSession}
+            className="bg-green-600 hover:bg-green-700 text-sm"
+          >
+            新建会话
+          </Button>
+          {currentSessionId && (
+            <span className="text-sm text-gray-600">
+              当前:{' '}
+              {sessions.find((s) => s.id === currentSessionId)?.title || '未知'}
+            </span>
+          )}
+        </div>
+
+        {/* 会话列表弹窗 */}
+        {showSessionList && (
+          <div className="mt-3 p-3 bg-white rounded border border-gray-300 max-h-96 overflow-auto">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-semibold">会话列表</h3>
+              <button
+                onClick={() => setShowSessionList(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            {sessions.length === 0 ? (
+              <p className="text-sm text-gray-500">尚无会话</p>
+            ) : (
+              sessions.map((s) => (
+                <div
+                  key={s.id}
+                  className={`p-2 mb-1 rounded border ${
+                    currentSessionId === s.id
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-gray-100 bg-gray-50'
+                  } cursor-pointer hover:bg-gray-100`}
+                >
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1" onClick={() => switchSession(s.id)}>
+                      <p className="font-medium text-sm">{s.title}</p>
+                      <p className="text-xs text-gray-500">
+                        {s.messages?.length || 0} 条消息 ·{' '}
+                        {new Date(s.updatedAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => {
+                          const newTitle = prompt('新标题:', s.title);
+                          if (newTitle && newTitle.trim()) {
+                            updateSessionTitle(s.id, newTitle.trim());
+                          }
+                        }}
+                        className="text-xs px-2 py-1 bg-yellow-300 hover:bg-yellow-400 rounded"
+                      >
+                        改名
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`确认删除会话 "${s.title}"?`))
+                            deleteSession(s.id);
+                        }}
+                        className="text-xs px-2 py-1 bg-red-500 text-white hover:bg-red-600 rounded"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
       </div>

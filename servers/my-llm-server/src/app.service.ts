@@ -4,13 +4,15 @@ import { invokeRAG } from './fundamentals/rag';
 import { invokePGVector } from './fundamentals/pg-vector';
 import { analyzeMedicalImage } from './fundamentals/medical';
 
-import { writeFile, mkdir, readFile } from 'fs/promises';
+import { writeFile, mkdir, readFile, readdir, stat, unlink } from 'fs/promises';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
+import { MemoryService } from './memory.service';
 
 @Injectable()
 export class AppService {
+  constructor(private memoryService: MemoryService) {}
   rag(query: string) {
     const response = invokePGVector(query);
     return response;
@@ -115,5 +117,59 @@ export class AppService {
     } catch (err) {
       return `读取日志失败: ${err instanceof Error ? err.message : String(err)}`;
     }
+  }
+
+  // -------------------- Session Management with LangChain Memory --------------------
+
+  async listSessions(): Promise<any[]> {
+    return await this.memoryService.listSessions();
+  }
+
+  async createSession(title?: string): Promise<any> {
+    const sessionId = await this.memoryService.createSession(
+      title || `会话 ${Date.now()}`,
+    );
+    return await this.memoryService.getSession(sessionId);
+  }
+
+  async getSession(id: string): Promise<any | null> {
+    return await this.memoryService.getSession(id);
+  }
+
+  async appendMessage(sessionId: string, message: any): Promise<any> {
+    if (message.sender === 'user') {
+      await this.memoryService.addUserMessage(sessionId, message.text);
+    } else if (message.sender === 'assistant') {
+      await this.memoryService.addAssistantMessage(sessionId, message.text);
+    }
+    return await this.memoryService.getSession(sessionId);
+  }
+
+  async deleteSession(id: string): Promise<boolean> {
+    await this.memoryService.deleteSession(id);
+    return true;
+  }
+
+  async updateSessionTitle(id: string, title: string): Promise<any | null> {
+    await this.memoryService.updateSessionTitle(id, title);
+    return await this.memoryService.getSession(id);
+  }
+
+  async getSessionHistory(sessionId: string): Promise<any[]> {
+    return await this.memoryService.getMessages(sessionId);
+  }
+
+  async getSessionContext(sessionId: string): Promise<string> {
+    return await this.memoryService.getMemoryContext(sessionId);
+  }
+
+  // 获取 LangChain BufferMemory 对象，用于高级记忆操作
+  async getSessionMemory(sessionId: string) {
+    return await this.memoryService.getMemory(sessionId);
+  }
+
+  // 清除会话记忆
+  async clearSessionMemory(sessionId: string): Promise<void> {
+    await this.memoryService.clearMemory(sessionId);
   }
 }
