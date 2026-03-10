@@ -4,6 +4,8 @@ import Sidebar from './components/Sidebar';
 import ChatModule from './components/modules/ChatModule';
 import MedicalModule from './components/modules/MedicalModule';
 import LoraTrainingModule from './components/modules/LoraTrainingModule';
+import WorkflowModule from './components/modules/WorkflowModule';
+import RagModule from './components/modules/RagModule';
 
 function App() {
   const [activeModule, setActiveModule] = useState('chat');
@@ -16,6 +18,10 @@ function App() {
         return <MedicalModule />;
       case 'training':
         return <LoraTrainingModule />;
+      case 'workflow':
+        return <WorkflowModule />;
+      case 'rag':
+        return <RagModule />;
       default:
         return <ChatModule />;
     }
@@ -24,9 +30,7 @@ function App() {
   return (
     <div className="flex h-screen bg-gray-100">
       <Sidebar activeModule={activeModule} onModuleChange={setActiveModule} />
-      <div className="flex-1 overflow-auto">
-        {renderActiveModule()}
-      </div>
+      <div className="flex-1 overflow-auto">{renderActiveModule()}</div>
     </div>
   );
 }

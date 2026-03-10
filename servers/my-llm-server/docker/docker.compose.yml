@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   ai-langchain-db:
-    image: postgres:18
+    image: pgvector/pgvector:pg18-trixie
     container_name: ai-langchain-db
     environment:
       POSTGRES_USER: postgres
@@ -12,6 +12,7 @@ services:
       - "5435:5432"
     volumes:
       - ./postgresql_data:/var/lib/postgresql
+      - ./init:/docker-entrypoint-initdb.d
 
 networks:
   default:

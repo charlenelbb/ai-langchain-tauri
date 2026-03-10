@@ -5,21 +5,37 @@ import {
 } from '@langchain/community/vectorstores/pgvector';
 import { Document } from '@langchain/core/documents';
 import { OllamaEmbeddings } from '@langchain/ollama';
-import { v4 } from 'uuid';
 
-export const invokePGVector = async (query: string) => {
-  // Ollama Embeddings configurations
-  const embeddings = new OllamaEmbeddings({
-    model: 'mxbai-embed-large:latest',
-    baseUrl: 'http://localhost:11434',
+type PgVectorInitOptions = {
+  tableName?: string;
+};
+
+const DEFAULT_TABLE_NAME = 'langchain_documents';
+
+const createEmbeddings = () =>
+  new OllamaEmbeddings({
+    model: process.env.OLLAMA_EMBEDDING_MODEL || 'mxbai-embed-large:latest',
+    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   });
 
-  // pg-vector configurations
+const getConnectionString = () => {
+  // 优先使用专用向量库连接串，其次复用 Prisma 的 DATABASE_URL
+  return (
+    process.env.PGVECTOR_CONNECTION_STRING ||
+    process.env.DATABASE_URL ||
+    'postgresql://postgres:password@localhost:5435/ai_langchain_db?schema=public'
+  );
+};
+
+const initializeStore = async (opts?: PgVectorInitOptions) => {
+  const embeddings = createEmbeddings();
+  const tableName = opts?.tableName || DEFAULT_TABLE_NAME;
+
   const config = {
     postgresConnectionOptions: {
-      connectionString: 'postgresql://postgres:123@127.0.0.1:5432/ai-pg-vector',
+      connectionString: getConnectionString(),
     } as PoolConfig,
-    tableName: 'testlangchainjs',
+    tableName,
     columns: {
       idColumnName: 'id',
       vectorColumnName: 'vector',
@@ -29,39 +45,47 @@ export const invokePGVector = async (query: string) => {
     distanceStrategy: 'cosine' as DistanceStrategy,
   };
 
-  // initialize vector store
-  const vectorStore = await PGVectorStore.initialize(embeddings, config);
+  return await PGVectorStore.initialize(embeddings, config);
+};
 
-  // rag documents
-  const document1: Document = {
-    pageContent: 'benben在地球',
-    metadata: {
-      name: 'd1',
-    },
-  };
-  const document2: Document = {
-    pageContent: 'benben会飞',
-    metadata: {
-      name: 'd2',
-    },
-  };
-  const document3: Document = {
-    pageContent: 'benben喜欢吃苹果',
-    metadata: {
-      name: 'd3',
-    },
-  };
+export type PgVectorSearchResult = {
+  pageContent: string;
+  metadata: Record<string, any>;
+  score: number;
+};
 
-  const ids = [v4(), v4(), v4()];
+export const ingestToPGVector = async (
+  documents: Document[],
+  opts?: { tableName?: string; ids?: string[] },
+) => {
+  const store = await initializeStore({ tableName: opts?.tableName });
+  await store.addDocuments(documents, opts?.ids ? { ids: opts.ids } : undefined);
+  return { inserted: documents.length, tableName: opts?.tableName || DEFAULT_TABLE_NAME };
+};
 
-  // add documents to vector store
-  await vectorStore.addDocuments([document1, document2, document3], { ids });
+export const searchPGVector = async (
+  query: string,
+  opts?: { tableName?: string; topK?: number; filter?: Record<string, any> },
+): Promise<PgVectorSearchResult[]> => {
+  const topK = opts?.topK ?? 4;
+  const store = await initializeStore({ tableName: opts?.tableName });
+  const vector = await store.embeddings.embedQuery(query);
 
-  // query
-  const vector = await embeddings.embedQuery(query);
+  // PGVectorStore 支持 metadata filter（如果底层实现/版本支持），不支持时会被忽略
+  const results = await (store as any).similaritySearchVectorWithScore(
+    vector,
+    topK,
+    opts?.filter,
+  );
 
-  // 基于向量的相似度检索，返回最相似的一个结果
-  const results = await vectorStore.similaritySearchVectorWithScore(vector, 1);
+  return (results || []).map((r: any) => ({
+    pageContent: r[0]?.pageContent ?? '',
+    metadata: r[0]?.metadata ?? {},
+    score: r[1] ?? 0,
+  }));
+};
 
-  console.log(results);
+// 兼容旧入口：把它当作“向量检索”使用
+export const invokePGVector = async (query: string) => {
+  return await searchPGVector(query, { topK: 4 });
 };

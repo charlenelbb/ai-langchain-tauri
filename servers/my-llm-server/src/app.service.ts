@@ -13,9 +13,8 @@ import { MemoryService } from './memory.service';
 @Injectable()
 export class AppService {
   constructor(private memoryService: MemoryService) {}
-  rag(query: string) {
-    const response = invokePGVector(query);
-    return response;
+  async rag(query: string) {
+    return await invokePGVector(query);
   }
   async prompt(msg: string): Promise<any> {
     const response = await invokePrompt(msg);
