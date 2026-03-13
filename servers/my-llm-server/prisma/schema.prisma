@@ -30,3 +30,15 @@ model Message {
 
   @@index([sessionId])
 }
+
+model ImageGeneration {
+  id        String   @id @default(cuid())
+  prompt    String
+  model     String
+  size      String
+  mimeType  String   @default("image/png")
+  imageData String   // base64
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

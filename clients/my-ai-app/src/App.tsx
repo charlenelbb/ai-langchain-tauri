@@ -6,6 +6,7 @@ import MedicalModule from './components/modules/MedicalModule';
 import LoraTrainingModule from './components/modules/LoraTrainingModule';
 import WorkflowModule from './components/modules/WorkflowModule';
 import RagModule from './components/modules/RagModule';
+import ImageGenModule from './components/modules/ImageGenModule';
 
 function App() {
   const [activeModule, setActiveModule] = useState('chat');
@@ -22,6 +23,8 @@ function App() {
         return <WorkflowModule />;
       case 'rag':
         return <RagModule />;
+      case 'image':
+        return <ImageGenModule />;
       default:
         return <ChatModule />;
     }

@@ -8,13 +8,22 @@ import { WorkflowController } from './workflow.controller';
 import { WorkflowService } from './workflow.service';
 import { RagController } from './rag.controller';
 import { RagService } from './rag.service';
+import { ImageController } from './image.controller';
+import { ImageService } from './image.service';
 
 @Module({
   imports: [
     // 使用内存存储，这样上传的图片无需写入磁盘，可直接从 buffer 中读取
     MulterModule.register({ storage: require('multer').memoryStorage() }),
   ],
-  controllers: [AppController, WorkflowController, RagController],
-  providers: [AppService, PrismaService, MemoryService, WorkflowService, RagService],
+  controllers: [AppController, WorkflowController, RagController, ImageController],
+  providers: [
+    AppService,
+    PrismaService,
+    MemoryService,
+    WorkflowService,
+    RagService,
+    ImageService,
+  ],
 })
 export class AppModule {}
