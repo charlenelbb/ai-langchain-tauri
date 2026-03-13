@@ -9,10 +9,14 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { MemoryService } from './memory.service';
+import { PrismaService } from './prisma.service';
 
 @Injectable()
 export class AppService {
-  constructor(private memoryService: MemoryService) {}
+  constructor(
+    private memoryService: MemoryService,
+    private prisma: PrismaService,
+  ) {}
   async rag(query: string) {
     return await invokePGVector(query);
   }
@@ -24,11 +28,63 @@ export class AppService {
     yield* invokePromptStream(msg);
   }
   async medicalAnalysis(fileBuffer: Buffer, question: string) {
-    // 将文件转为 Base64 字符串
     const base64 = fileBuffer.toString('base64');
     const result = await analyzeMedicalImage(base64, question);
+    try {
+      await (this.prisma.client as any).medicalRecord.create({
+        data: { question: question || '', answer: result.content },
+      });
+    } catch {
+      // 忽略入库失败
+    }
     return result;
   }
+
+  /** 流式医疗分析：先拉取完整结果（含思考），再按块 yield 思考与回答，便于前端展示推理过程 */
+  async *medicalAnalysisStream(
+    fileBuffer: Buffer,
+    question: string,
+  ): AsyncGenerator<{ type: 'thinking' | 'chunk'; chunk: string }, void, unknown> {
+    const base64 = fileBuffer.toString('base64');
+    const { reasoning, content } = await analyzeMedicalImage(base64, question);
+    const chunkSize = 40;
+    if (reasoning?.length) {
+      for (let i = 0; i < reasoning.length; i += chunkSize) {
+        yield { type: 'thinking', chunk: reasoning.slice(i, i + chunkSize) };
+      }
+    }
+    for (let i = 0; i < content.length; i += chunkSize) {
+      yield { type: 'chunk', chunk: content.slice(i, i + chunkSize) };
+    }
+  }
+
+  async saveMedicalRecord(question: string, answer: string) {
+    try {
+      await (this.prisma.client as any).medicalRecord.create({
+        data: { question: question || '', answer },
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  async listMedicalHistory(limit = 50) {
+    try {
+      const list = await (this.prisma.client as any).medicalRecord.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: Math.min(Number(limit) || 50, 100),
+      });
+      return list.map((row) => ({
+        id: row.id,
+        question: row.question,
+        answer: row.answer,
+        createdAt: row.createdAt.toISOString(),
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   getHello(): string {
     return 'Hello World!';
   }

@@ -115,6 +115,13 @@ export class AppController {
     }
   }
 
+  @Get('medical/history')
+  async medicalHistory(@Query('limit') limit?: string) {
+    return await this.appService.listMedicalHistory(
+      limit ? parseInt(limit, 10) : undefined,
+    );
+  }
+
   @Post('medical')
   @UseInterceptors(FileInterceptor('image'))
   async medical(
@@ -127,16 +134,54 @@ export class AppController {
       return res.status(400).json({ error: '没有上传图片' });
     }
     try {
-      const answer = await this.appService.medicalAnalysis(
+      const result = await this.appService.medicalAnalysis(
         file.buffer,
         question,
       );
-      return res.json({ answer });
+      return res.json({
+        answer: result.content,
+        reasoning: result.reasoning,
+      });
     } catch (err) {
       return res
         .status(500)
         .json({ error: err instanceof Error ? err.message : '处理失败' });
     }
+  }
+
+  @Post('medical/stream')
+  @UseInterceptors(FileInterceptor('image'))
+  async medicalStream(
+    @UploadedFile() file: any,
+    @Body('question') question: string,
+    @Res() res: Response,
+  ) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    if (!file) {
+      res.write('data: ' + JSON.stringify({ error: '没有上传图片' }) + '\n\n');
+      return res.end();
+    }
+    try {
+      let fullContent = '';
+      for await (const item of this.appService.medicalAnalysisStream(
+        file.buffer,
+        question ?? '',
+      )) {
+        if (item.type === 'chunk') fullContent += item.chunk;
+        res.write(
+          'data: ' + JSON.stringify({ type: item.type, chunk: item.chunk }) + '\n\n',
+        );
+      }
+      await this.appService.saveMedicalRecord(question ?? '', fullContent);
+      res.write('data: ' + JSON.stringify({ done: true }) + '\n\n');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '处理失败';
+      res.write('data: ' + JSON.stringify({ error: msg }) + '\n\n');
+    }
+    res.end();
   }
 
   // 接收训练数据并触发 LoRA 微调
