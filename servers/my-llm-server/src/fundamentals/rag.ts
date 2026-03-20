@@ -1,10 +1,7 @@
 import { MemoryVectorStore } from '@langchain/classic/vectorstores/memory';
-import { OllamaEmbeddings } from '@langchain/ollama';
+import { createDashScopeTextEmbeddingsV4 } from './dashscope-embeddings';
 
-const embeddings = new OllamaEmbeddings({
-  model: 'mxbai-embed-large:latest',
-  baseUrl: 'http://localhost:11434',
-});
+const embeddings = createDashScopeTextEmbeddingsV4();
 
 const text = '我是benben，我在地球。';
 

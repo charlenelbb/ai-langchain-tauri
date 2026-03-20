@@ -4,7 +4,7 @@ import {
   PGVectorStore,
 } from '@langchain/community/vectorstores/pgvector';
 import { Document } from '@langchain/core/documents';
-import { OllamaEmbeddings } from '@langchain/ollama';
+import { createDashScopeTextEmbeddingsV4 } from './dashscope-embeddings';
 
 type PgVectorInitOptions = {
   tableName?: string;
@@ -12,11 +12,7 @@ type PgVectorInitOptions = {
 
 const DEFAULT_TABLE_NAME = 'langchain_documents';
 
-const createEmbeddings = () =>
-  new OllamaEmbeddings({
-    model: process.env.OLLAMA_EMBEDDING_MODEL || 'mxbai-embed-large:latest',
-    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-  });
+const createEmbeddings = () => createDashScopeTextEmbeddingsV4();
 
 const getConnectionString = () => {
   // 优先使用专用向量库连接串，其次复用 Prisma 的 DATABASE_URL
