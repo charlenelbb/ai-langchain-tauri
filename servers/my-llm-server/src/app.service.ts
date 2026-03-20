@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { invokePrompt, invokePromptStream } from './fundamentals/prompt';
 import { invokeRAG } from './fundamentals/rag';
 import { invokePGVector } from './fundamentals/pg-vector';
-import { analyzeMedicalImage } from './fundamentals/medical';
+import { analyzeMedicalImage, analyzeMedicalTextStream } from './fundamentals/medical';
 
 import { writeFile, mkdir, readFile, readdir, stat, unlink } from 'fs/promises';
 import { spawn } from 'child_process';
@@ -46,6 +46,14 @@ export class AppService {
     question: string,
   ): AsyncGenerator<{ type: 'thinking' | 'chunk'; chunk: string }, void, unknown> {
     const base64 = fileBuffer.toString('base64');
+
+    // 无图：用 DashScope streaming 逐 token 推送，避免纯文本等待完整结果导致超时
+    if (!base64.trim()) {
+      yield* analyzeMedicalTextStream(question);
+      return;
+    }
+
+    // 有图：仍走完整结果后分块 yield（多模态 streaming 先不做）
     const { reasoning, content } = await analyzeMedicalImage(base64, question);
     const chunkSize = 40;
     if (reasoning?.length) {

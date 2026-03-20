@@ -56,6 +56,15 @@ const ImageGenModule: React.FC = () => {
     loadHistory();
   }, [loadHistory]);
 
+  const handleNewConversation = useCallback(() => {
+    if (isGenerating) return;
+    setPrompt('');
+    setImages([]);
+    setError('');
+    setN(1);
+    loadHistory();
+  }, [isGenerating, loadHistory]);
+
   const canGenerate = useMemo(
     () => prompt.trim().length > 0 && !isGenerating,
     [prompt, isGenerating]
@@ -100,7 +109,16 @@ const ImageGenModule: React.FC = () => {
   return (
     <div className="p-6">
       <div className="max-w-5xl">
-        <h2 className="text-xl font-bold mb-4">文生图</h2>
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <h2 className="text-xl font-bold">文生图</h2>
+          <Button
+            onClick={handleNewConversation}
+            disabled={isGenerating}
+            className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-4 py-2 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            新建对话
+          </Button>
+        </div>
 
         <div className="grid grid-cols-3 gap-4 mb-4">
           <div className="col-span-3">

@@ -109,7 +109,25 @@ export class MemoryService {
   async getMemoryContext(sessionId: string): Promise<string> {
     const memory = await this.getMemory(sessionId);
     const variables = await memory.loadMemoryVariables({});
-    return variables.history || '';
+    const history = (variables as any)?.history;
+
+    if (typeof history === 'string') return history;
+
+    // BufferMemory(returnMessages: true) 下 history 可能是消息数组
+    if (Array.isArray(history)) {
+      return history
+        .map((m: any) => {
+          if (!m) return '';
+          if (typeof m.content === 'string') return m.content;
+          if (typeof m.text === 'string') return m.text;
+          if (typeof m === 'string') return m;
+          return JSON.stringify(m);
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    return history ? String(history) : '';
   }
 
   /**

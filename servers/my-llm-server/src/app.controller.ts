@@ -130,12 +130,10 @@ export class AppController {
     @Res() res: Response,
   ) {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    if (!file) {
-      return res.status(400).json({ error: '没有上传图片' });
-    }
     try {
+      const fileBuffer = file?.buffer ? file.buffer : Buffer.alloc(0);
       const result = await this.appService.medicalAnalysis(
-        file.buffer,
+        fileBuffer,
         question,
       );
       return res.json({
@@ -154,28 +152,59 @@ export class AppController {
   async medicalStream(
     @UploadedFile() file: any,
     @Body('question') question: string,
+    @Body('rawQuestion') rawQuestion: string | undefined,
+    @Body('sessionId') sessionId: string | undefined,
     @Res() res: Response,
   ) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    if (!file) {
-      res.write('data: ' + JSON.stringify({ error: '没有上传图片' }) + '\n\n');
-      return res.end();
-    }
     try {
+      const fileBuffer = file?.buffer ? file.buffer : Buffer.alloc(0);
+      const userText = (rawQuestion ?? question) || '';
+
+      // 让 SSE 连接尽快返回“开始事件”，避免纯文本生成等待过久导致前端侧超时。
+      // 前端收到后会进入 thinking 状态，但 chunk 为空不会影响内容。
+      res.write('data: ' + JSON.stringify({ type: 'thinking', chunk: '' }) + '\n\n');
+
+      let promptWithContext = question ?? '';
+      if (sessionId) {
+        // 先读取历史，再追加当前用户问题到会话，避免把“当前问题”重复算进上下文
+        const historyContext = await this.appService.getSessionContext(
+          sessionId,
+        );
+        if (typeof historyContext === 'string' && historyContext.trim()) {
+          promptWithContext =
+            `上下文：\n${historyContext}\n\n当前问题：${question}`.trim();
+        }
+
+        // 将用户消息写入会话历史（用于下一轮上下文）
+        await this.appService.appendMessage(sessionId, {
+          sender: 'user',
+          text: userText,
+        });
+      }
+
       let fullContent = '';
       for await (const item of this.appService.medicalAnalysisStream(
-        file.buffer,
-        question ?? '',
+        fileBuffer,
+        promptWithContext ?? '',
       )) {
         if (item.type === 'chunk') fullContent += item.chunk;
         res.write(
           'data: ' + JSON.stringify({ type: item.type, chunk: item.chunk }) + '\n\n',
         );
       }
-      await this.appService.saveMedicalRecord(question ?? '', fullContent);
+
+      if (sessionId) {
+        await this.appService.appendMessage(sessionId, {
+          sender: 'assistant',
+          text: fullContent,
+        });
+      }
+
+      await this.appService.saveMedicalRecord(userText, fullContent);
       res.write('data: ' + JSON.stringify({ done: true }) + '\n\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : '处理失败';
@@ -239,7 +268,8 @@ export class AppController {
     return sessions.map((s) => ({
       id: s.id,
       title: s.title,
-      messages: s.messages,
+      // MemoryService.listSessions() 提供的是 messageCount，而不是 messages
+      messageCount: s.messageCount,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
     }));
