@@ -4,7 +4,6 @@ import Sidebar from './components/Sidebar';
 import ChatModule from './components/modules/ChatModule';
 import MedicalModule from './components/modules/MedicalModule';
 import LoraTrainingModule from './components/modules/LoraTrainingModule';
-import WorkflowModule from './components/modules/WorkflowModule';
 import RagModule from './components/modules/RagModule';
 import ImageGenModule from './components/modules/ImageGenModule';
 
@@ -19,8 +18,6 @@ function App() {
         return <MedicalModule />;
       case 'training':
         return <LoraTrainingModule />;
-      case 'workflow':
-        return <WorkflowModule />;
       case 'rag':
         return <RagModule />;
       case 'image':
