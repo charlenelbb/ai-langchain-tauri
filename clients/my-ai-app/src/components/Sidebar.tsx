@@ -8,9 +8,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activeModule, onModuleChange }) => {
   const modules = [
-    { id: 'chat', label: '对话助手', icon: '💬' },
     { id: 'medical', label: '医疗问答', icon: '🏥' },
-    { id: 'training', label: 'LoRA训练', icon: '🧠' },
     { id: 'rag', label: 'RAG 知识库', icon: '📚' },
     { id: 'image', label: '文生图', icon: '🖼️' },
   ];
