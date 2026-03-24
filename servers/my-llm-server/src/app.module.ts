@@ -10,6 +10,7 @@ import { RagController } from './rag.controller';
 import { RagService } from './rag.service';
 import { ImageController } from './image.controller';
 import { ImageService } from './image.service';
+import { SseStreamService } from './sse/sse-stream.service';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ImageService } from './image.service';
     WorkflowService,
     RagService,
     ImageService,
+    SseStreamService,
   ],
 })
 export class AppModule {}

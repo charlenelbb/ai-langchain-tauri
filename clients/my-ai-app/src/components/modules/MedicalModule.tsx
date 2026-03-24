@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { connectResilientSse } from '../../lib/sseResilient';
 import { Button } from '../ui/button';
 
 const DISCLAIMER =
@@ -74,6 +75,14 @@ const MedicalModule: React.FC = () => {
   const [promptTemplate, setPromptTemplate] = useState('detailed');
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const medicalSseStopRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      medicalSseStopRef.current?.();
+      medicalSseStopRef.current = null;
+    };
+  }, []);
 
   // 会话（多轮对话上下文）
   const [sessions, setSessions] = useState<SessionItem[]>([]);
@@ -371,61 +380,78 @@ const MedicalModule: React.FC = () => {
     if (sessionId) form.append('sessionId', sessionId);
     if (medicalFile) form.append('image', medicalFile);
 
+    medicalSseStopRef.current?.();
+    medicalSseStopRef.current = null;
+
     try {
-      const res = await fetch(`${API_BASE}/medical/stream`, {
+      const res = await fetch(`${API_BASE}/medical/stream/start`, {
         method: 'POST',
         body: form,
       });
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
         setStreamingStatus('error');
-        setErrorMessage('请求失败或无响应体');
+        setErrorMessage('无法开启医疗流');
+        setIsMedicalLoading(false);
         return;
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const raw = line.slice(6).trim();
-            if (raw === '') continue;
+      const body = (await res.json()) as { streamId?: string };
+      if (!body.streamId) {
+        setStreamingStatus('error');
+        setErrorMessage('服务端未返回 streamId');
+        setIsMedicalLoading(false);
+        return;
+      }
+
+      const sid = sessionId;
+      medicalSseStopRef.current = connectResilientSse({
+        baseUrl: API_BASE,
+        initialStreamId: body.streamId,
+        maxRetries: 30,
+        initialBackoffMs: 1000,
+        maxBackoffMs: 30_000,
+        handlers: {
+          onMessageChunk: (raw) => {
             try {
-              const data = JSON.parse(raw);
-              if (data.error) {
-                setStreamingStatus('error');
-                setErrorMessage(data.error);
-                if (sessionId) loadSessionMessages(sessionId);
-                return;
-              }
+              const data = JSON.parse(raw) as {
+                type?: string;
+                chunk?: string;
+              };
               if (data.chunk != null) {
                 if (data.type === 'thinking') {
-                  setStreamingStatus((s) => (s === 'thinking' ? s : 'streaming'));
-                  setThinkingContent((prev) => prev + data.chunk);
+                  setStreamingStatus((s) =>
+                    s === 'thinking' ? s : 'streaming',
+                  );
+                  setThinkingContent((prev) => prev + (data.chunk ?? ''));
                 } else {
                   setStreamingStatus('streaming');
-                  setMedicalResult((prev) => prev + data.chunk);
+                  setMedicalResult((prev) => prev + (data.chunk ?? ''));
                 }
               }
-              if (data.done) {
-                setStreamingStatus('done');
-                if (sessionId) loadSessionMessages(sessionId);
-              }
             } catch {
-              // ignore parse error
+              /* ignore */
             }
-          }
-        }
-      }
-      setStreamingStatus((s) => (s === 'error' ? s : 'done'));
+          },
+          onDone: () => {
+            setStreamingStatus('done');
+            if (sid) void loadSessionMessages(sid);
+            setIsMedicalLoading(false);
+          },
+          onError: (msg) => {
+            setStreamingStatus('error');
+            setErrorMessage(msg);
+            if (sid) void loadSessionMessages(sid);
+            setIsMedicalLoading(false);
+          },
+          onGiveUp: () => {
+            setStreamingStatus('error');
+            setErrorMessage('连接多次失败，已停止重试');
+            setIsMedicalLoading(false);
+          },
+        },
+      });
     } catch (err) {
       setStreamingStatus('error');
       setErrorMessage(err instanceof Error ? err.message : '请求失败');
-    } finally {
       setIsMedicalLoading(false);
     }
 

@@ -10,14 +10,21 @@ import {
   Param,
   Delete,
   Patch,
+  Req,
+  Header,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import { randomUUID } from 'crypto';
+import type { Request, Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AppService } from './app.service';
+import { SseStreamService } from './sse/sse-stream.service';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(
+    private readonly appService: AppService,
+    private readonly sseStreamService: SseStreamService,
+  ) {}
 
   @Get()
   getHello(): string {
@@ -35,84 +42,32 @@ export class AppController {
     return response;
   }
 
-  @Get('sse')
-  async sse(
-    @Query('query') query: string,
+  /**
+   * 可恢复 SSE：?query= 开新流；?streamId= 续传；Last-Event-ID 或 ?lastEventId= 断点
+   */
+  @Get('sse/stream')
+  async sseStream(
+    @Req() req: Request,
     @Res() res: Response,
+    @Query('query') query?: string,
+    @Query('streamId') streamId?: string,
   ): Promise<void> {
-    // 设置 SSE 响应头
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-
-    try {
-      // 发送初始连接成功事件
-      res.write('event: open\n');
-      res.write(`data: SSE连接已建立\n\n`);
-
-      // 获取流式响应
-      const stream = this.appService.promptStream(query);
-
-      // 逐个发送数据
-      for await (const chunk of stream) {
-        res.write('event: message\n');
-        res.write(`data: ${chunk}\n\n`);
-      }
-
-      // 发送完成事件
-      res.write('event: done\n');
-      res.write('data: 流已完成\n\n');
-      res.end();
-    } catch (error) {
-      res.write('event: error\n');
-      res.write(
-        `data: ${error instanceof Error ? error.message : '未知错误'}\n\n`,
-      );
-      res.end();
-    }
+    await this.sseStreamService.handleStream(req, res, { query, streamId });
   }
 
-  // SSE with session context - 使用会话上下文的流式端点
-  @Get('sse/:sessionId')
-  async sseWithContext(
-    @Param('sessionId') sessionId: string,
-    @Query('query') query: string,
+  @Get('sse/session/:sessionId/stream')
+  async sseSessionStream(
+    @Req() req: Request,
     @Res() res: Response,
+    @Param('sessionId') sessionId: string,
+    @Query('query') query?: string,
+    @Query('streamId') streamId?: string,
   ): Promise<void> {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-
-    try {
-      res.write('event: open\n');
-      res.write(`data: SSE连接已建立\n\n`);
-
-      // 获取会话的历史上下文
-      const context = await this.appService.getSessionContext(sessionId);
-      const promptWithContext = context
-        ? `上下文：\n${context}\n\n当前问题：${query}`
-        : query;
-
-      // 获取流式响应
-      const stream = this.appService.promptStream(promptWithContext);
-
-      for await (const chunk of stream) {
-        res.write('event: message\n');
-        res.write(`data: ${chunk}\n\n`);
-      }
-
-      res.write('event: done\n');
-      res.write('data: 流已完成\n\n');
-      res.end();
-    } catch (error) {
-      res.write('event: error\n');
-      res.write(
-        `data: ${error instanceof Error ? error.message : '未知错误'}\n\n`,
-      );
-      res.end();
-    }
+    await this.sseStreamService.handleStream(req, res, {
+      query,
+      sessionId,
+      streamId,
+    });
   }
 
   @Get('medical/history')
@@ -147,70 +102,27 @@ export class AppController {
     }
   }
 
-  @Post('medical/stream')
+  /**
+   * 医疗流：multipart 提交后返回 streamId，前端用 EventSource 订阅 GET /sse/stream?streamId=
+   */
+  @Post('medical/stream/start')
+  @Header('Access-Control-Allow-Origin', '*')
   @UseInterceptors(FileInterceptor('image'))
-  async medicalStream(
+  async medicalStreamStart(
     @UploadedFile() file: any,
     @Body('question') question: string,
     @Body('rawQuestion') rawQuestion: string | undefined,
     @Body('sessionId') sessionId: string | undefined,
-    @Res() res: Response,
   ) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    try {
-      const fileBuffer = file?.buffer ? file.buffer : Buffer.alloc(0);
-      const userText = (rawQuestion ?? question) || '';
-
-      // 让 SSE 连接尽快返回“开始事件”，避免纯文本生成等待过久导致前端侧超时。
-      // 前端收到后会进入 thinking 状态，但 chunk 为空不会影响内容。
-      res.write('data: ' + JSON.stringify({ type: 'thinking', chunk: '' }) + '\n\n');
-
-      let promptWithContext = question ?? '';
-      if (sessionId) {
-        // 先读取历史，再追加当前用户问题到会话，避免把“当前问题”重复算进上下文
-        const historyContext = await this.appService.getSessionContext(
-          sessionId,
-        );
-        if (typeof historyContext === 'string' && historyContext.trim()) {
-          promptWithContext =
-            `上下文：\n${historyContext}\n\n当前问题：${question}`.trim();
-        }
-
-        // 将用户消息写入会话历史（用于下一轮上下文）
-        await this.appService.appendMessage(sessionId, {
-          sender: 'user',
-          text: userText,
-        });
-      }
-
-      let fullContent = '';
-      for await (const item of this.appService.medicalAnalysisStream(
-        fileBuffer,
-        promptWithContext ?? '',
-      )) {
-        if (item.type === 'chunk') fullContent += item.chunk;
-        res.write(
-          'data: ' + JSON.stringify({ type: item.type, chunk: item.chunk }) + '\n\n',
-        );
-      }
-
-      if (sessionId) {
-        await this.appService.appendMessage(sessionId, {
-          sender: 'assistant',
-          text: fullContent,
-        });
-      }
-
-      await this.appService.saveMedicalRecord(userText, fullContent);
-      res.write('data: ' + JSON.stringify({ done: true }) + '\n\n');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '处理失败';
-      res.write('data: ' + JSON.stringify({ error: msg }) + '\n\n');
-    }
-    res.end();
+    const streamId = randomUUID();
+    const fileBuffer = file?.buffer ? file.buffer : Buffer.alloc(0);
+    this.sseStreamService.startMedicalStream(streamId, {
+      fileBuffer,
+      question: question ?? '',
+      rawQuestion: rawQuestion ?? question ?? '',
+      sessionId,
+    });
+    return { streamId };
   }
 
   // Sessions API - 后端持久化对话会话
