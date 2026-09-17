@@ -1,0 +1,22 @@
+[
+  { "id": "ship-1", "query": "多久发货", "expectIntent": "aftersale", "expectGrounded": true, "mustContain": "工作日" },
+  { "id": "ship-2", "query": "什么时候发货", "expectIntent": "aftersale", "expectGrounded": true, "mustContain": "发货" },
+  { "id": "ship-3", "query": "物流要几天", "expectIntent": "aftersale", "expectGrounded": true },
+  { "id": "refund-1", "query": "7天无理由怎么退货", "expectIntent": "aftersale", "expectGrounded": true, "mustContain": "退" },
+  { "id": "refund-2", "query": "虚拟产品能退款吗", "expectIntent": "aftersale", "expectGrounded": true },
+  { "id": "refund-3", "query": "换货运费谁承担", "expectIntent": "aftersale", "expectGrounded": true },
+  { "id": "price-1", "query": "专业版多少钱", "expectIntent": "presale", "expectGrounded": true },
+  { "id": "price-2", "query": "基础版月费", "expectIntent": "presale", "expectGrounded": true },
+  { "id": "buy-1", "query": "怎么购买套餐", "expectIntent": "presale", "expectGrounded": true },
+  { "id": "invoice-1", "query": "发票怎么开", "expectIntent": "aftersale", "expectGrounded": true },
+  { "id": "warranty-1", "query": "保修多久", "expectIntent": "aftersale", "expectGrounded": true },
+  { "id": "complaint-1", "query": "我要投诉你们", "expectIntent": "complaint", "expectGrounded": true },
+  { "id": "complaint-2", "query": "态度太差了催一下", "expectIntent": "complaint" },
+  { "id": "off-1", "query": "今天天气怎么样", "expectIntent": "other", "expectGrounded": false },
+  { "id": "off-2", "query": "帮我写一首诗", "expectIntent": "other", "expectGrounded": false },
+  { "id": "off-3", "query": "现在比特币多少钱", "expectIntent": "presale", "expectGrounded": false },
+  { "id": "ship-4", "query": "偏远地区发货要加几天", "expectIntent": "aftersale", "expectGrounded": true },
+  { "id": "ship-5", "query": "虚拟产品还走物流吗", "expectIntent": "aftersale", "expectGrounded": true },
+  { "id": "price-3", "query": "企业版报价", "expectIntent": "presale", "expectGrounded": true },
+  { "id": "after-1", "query": "售后几点回复", "expectIntent": "aftersale", "expectGrounded": true }
+]

@@ -1,0 +1,14 @@
+---
+description: 改完客服/鉴权代码后先跑单测再审查 diff
+alwaysApply: true
+---
+
+# 改完自动测试与审查
+
+修改 `servers/my-llm-server/src` 或客服前端后，在结束本轮前：
+
+1. 跑 `pnpm --filter my-llm-server test:unit`；失败则修到通过。
+2. 审查未提交 diff：鉴权遗漏、转人工误触发/未转接、密钥回显、缺单测。
+3. 有问题就修；没有则用两三句话说明测试通过、审查无发现。
+
+不要编辑 plan 文件。不要为了审查去改无关文件。

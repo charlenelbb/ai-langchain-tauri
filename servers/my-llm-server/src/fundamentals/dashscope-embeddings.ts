@@ -1,5 +1,8 @@
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-v4';
 
+const API_KEY_HINT =
+  '请到 https://bailian.console.aliyun.com/?tab=model#/api-key 复制以 sk- 开头的密钥，写入 servers/my-llm-server/.env 的 DASHSCOPE_API_KEY，然后重启后端（改 .env 不会热更新）。';
+
 type EmbeddingItem = {
   embedding?: number[];
 };
@@ -8,6 +11,7 @@ type EmbeddingResponse = {
   data?: EmbeddingItem[];
   message?: string;
   code?: number | string;
+  error?: { message?: string; code?: string };
 };
 
 export type DashScopeEmbeddingsOptions = {
@@ -29,6 +33,33 @@ export type DashScopeEmbeddingsOptions = {
   batchSize?: number;
 };
 
+function resolveApiKey(options: DashScopeEmbeddingsOptions): string {
+  const apiKey = (
+    options.apiKey ||
+    process.env.DASHSCOPE_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    ''
+  ).trim();
+  if (!apiKey) {
+    throw new Error(`未配置 DASHSCOPE_API_KEY。${API_KEY_HINT}`);
+  }
+  if (!apiKey.startsWith('sk-')) {
+    throw new Error(
+      `DASHSCOPE_API_KEY 格式无效（百炼密钥应以 sk- 开头）。${API_KEY_HINT}`,
+    );
+  }
+  return apiKey;
+}
+
+function isInvalidApiKeyError(
+  status: number,
+  json: EmbeddingResponse | undefined,
+): boolean {
+  if (status === 401) return true;
+  const code = json?.error?.code || json?.code;
+  return String(code || '').toLowerCase() === 'invalid_api_key';
+}
+
 class DashScopeTextEmbeddingsV4 {
   private readonly apiKey: string;
   private readonly compatibleBaseUrl: string;
@@ -37,16 +68,7 @@ class DashScopeTextEmbeddingsV4 {
   private readonly batchSize: number;
 
   constructor(options: DashScopeEmbeddingsOptions = {}) {
-    const apiKey =
-      options.apiKey ||
-      process.env.DASHSCOPE_API_KEY ||
-      process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        '未配置 DASHSCOPE_API_KEY（或 OPENAI_API_KEY）。请在 .env 中设置后重启。',
-      );
-    }
-    this.apiKey = apiKey;
+    this.apiKey = resolveApiKey(options);
     this.compatibleBaseUrl =
       options.compatibleBaseUrl ||
       process.env.DASHSCOPE_EMBEDDING_BASE_URL ||
@@ -86,10 +108,14 @@ class DashScopeTextEmbeddingsV4 {
       }
     }
 
+    if (isInvalidApiKeyError(resp.status, json)) {
+      throw new Error(`百炼 embeddings 鉴权失败（401 invalid_api_key）。${API_KEY_HINT}`);
+    }
+
     if (!resp.ok) {
+      const msg = json?.error?.message || json?.message;
       throw new Error(
-        json?.message ||
-          `请求百炼 embeddings 失败: ${resp.status} ${resp.statusText}\n${raw?.slice(0, 300)}`,
+        msg || `请求百炼 embeddings 失败: ${resp.status} ${resp.statusText}`,
       );
     }
     if (json?.code) {
@@ -122,4 +148,3 @@ class DashScopeTextEmbeddingsV4 {
 
 export const createDashScopeTextEmbeddingsV4 = () =>
   new DashScopeTextEmbeddingsV4();
-

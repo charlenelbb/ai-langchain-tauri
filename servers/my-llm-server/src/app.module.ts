@@ -1,31 +1,37 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { MulterModule } from '@nestjs/platform-express';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaService } from './prisma.service';
 import { MemoryService } from './memory.service';
-import { WorkflowController } from './workflow.controller';
-import { WorkflowService } from './workflow.service';
 import { RagController } from './rag.controller';
 import { RagService } from './rag.service';
-import { ImageController } from './image.controller';
-import { ImageService } from './image.service';
 import { SseStreamService } from './sse/sse-stream.service';
+import { CsController } from './cs/cs.controller';
+import { CsService } from './cs/cs.service';
+import { AuthController } from './auth/auth.controller';
+import { AuthService } from './auth/auth.service';
+import { AuthGuard } from './auth/auth.guard';
+import { RolesGuard } from './auth/roles.guard';
+import { AuditService } from './auth/audit.service';
 
 @Module({
   imports: [
-    // 使用内存存储，这样上传的图片无需写入磁盘，可直接从 buffer 中读取
     MulterModule.register({ storage: require('multer').memoryStorage() }),
   ],
-  controllers: [AppController, WorkflowController, RagController, ImageController],
+  controllers: [AppController, RagController, CsController, AuthController],
   providers: [
     AppService,
     PrismaService,
     MemoryService,
-    WorkflowService,
     RagService,
-    ImageService,
     SseStreamService,
+    CsService,
+    AuthService,
+    AuditService,
+    { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })
 export class AppModule {}

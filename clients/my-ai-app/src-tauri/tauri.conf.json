@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "my-ai-app",
-        "width": 800,
-        "height": 600,
+        "title": "智能客服",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 640,
         "hiddenTitle": true
       }
     ],

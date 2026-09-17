@@ -10,20 +10,44 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Session {
-  id        String   @id @default(cuid())
-  title     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  role         String // customer | agent
+  createdAt    DateTime @default(now())
 
+  sessions         Session[]
+  tickets          Ticket[]   @relation("TicketOwner")
+  assignedTickets  Ticket[]   @relation("TicketAssignee")
+  auditLogs        AuditLog[]
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  title     String
+  kind      String    @default("customer-service")
+  intent    String?
+  userId    String?
+  botPaused Boolean   @default(false)
+  handoffAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user     User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   messages Message[]
+  tickets  Ticket[]
+
+  @@index([kind])
+  @@index([userId])
 }
 
 model Message {
   id        String   @id @default(cuid())
   sessionId String
-  role      String // 'user' or 'assistant'
+  role      String // user | assistant | agent
   content   String
+  metadata  String? // JSON: intent, citations, grounded
   createdAt DateTime @default(now())
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
@@ -31,23 +55,41 @@ model Message {
   @@index([sessionId])
 }
 
-model ImageGeneration {
-  id        String   @id @default(cuid())
-  prompt    String
-  model     String
-  size      String
-  mimeType  String   @default("image/png")
-  imageData String   // base64
-  createdAt DateTime @default(now())
+model Ticket {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  intent      String // presale | aftersale | complaint | other
+  status      String   @default("open") // open | in_progress | closed
+  sessionId   String?
+  userId      String?
+  assigneeId  String?
+  kbId        String   @default("customer-service")
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
+  session  Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user     User?    @relation("TicketOwner", fields: [userId], references: [id], onDelete: SetNull)
+  assignee User?    @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([status])
   @@index([createdAt])
+  @@index([sessionId])
+  @@index([userId])
+  @@index([assigneeId])
 }
 
-model MedicalRecord {
+model AuditLog {
   id        String   @id @default(cuid())
-  question  String
-  answer    String
+  userId    String?
+  action    String
+  resource  String
+  detail    String?
   createdAt DateTime @default(now())
 
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   @@index([createdAt])
+  @@index([userId])
 }

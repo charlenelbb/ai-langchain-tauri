@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Local Postgres volume
+postgresql_data/
+
+# Tauri build artifacts
+**/src-tauri/target/
+**/src-tauri/gen/
+
+# pnpm workspace; do not commit npm lockfiles
+clients/my-ai-app/package-lock.json

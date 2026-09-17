@@ -3,10 +3,30 @@
  * 与 GET /sse/stream 或 /sse/session/:id/stream 配合；断线后同一 URL（含 streamId + lastEventId query）重连。
  */
 
+export type CsCitation = {
+  source: string;
+  chunkIndex: number;
+  score: number;
+  snippet: string;
+};
+
 export type ResilientSseHandlers = {
   onMeta?: (streamId: string) => void;
   onMessageChunk?: (chunk: string) => void;
-  onDone?: () => void;
+  onIntent?: (intent: string) => void;
+  onCitations?: (payload: {
+    grounded?: boolean;
+    suggestTicket?: boolean;
+    kbId?: string;
+    citations?: CsCitation[];
+  }) => void;
+  onStatus?: (payload: { phase?: string; message?: string }) => void;
+  onDone?: (payload?: {
+    botPaused?: boolean;
+    suggestTicket?: boolean;
+    intent?: string;
+    grounded?: boolean;
+  }) => void;
   onError?: (message: string) => void;
   onRetry?: (attempt: number, delayMs: number) => void;
   onGiveUp?: () => void;
@@ -21,6 +41,7 @@ export type ResilientSseOptions = {
   initialBackoffMs: number;
   maxBackoffMs: number;
   handlers: ResilientSseHandlers;
+  getHeaders?: () => Record<string, string>;
 };
 
 function buildStreamUrl(opts: {
@@ -90,6 +111,7 @@ export function connectResilientSse(options: ResilientSseOptions): () => void {
     initialBackoffMs,
     maxBackoffMs,
     handlers,
+    getHeaders,
   } = options;
 
   let streamId: string | null = initialStreamId ?? null;
@@ -169,11 +191,52 @@ export function connectResilientSse(options: ResilientSseOptions): () => void {
       case 'message':
         handlers.onMessageChunk?.(data);
         break;
+      case 'intent':
+        try {
+          const parsed = JSON.parse(data) as { intent?: string };
+          if (parsed.intent) handlers.onIntent?.(parsed.intent);
+        } catch {
+          handlers.onError?.('invalid intent payload');
+        }
+        break;
+      case 'citations':
+        try {
+          const parsed = JSON.parse(data) as {
+            grounded?: boolean;
+            suggestTicket?: boolean;
+            kbId?: string;
+            citations?: CsCitation[];
+          };
+          handlers.onCitations?.(parsed);
+        } catch {
+          handlers.onError?.('invalid citations payload');
+        }
+        break;
+      case 'status':
+        try {
+          const parsed = JSON.parse(data) as { phase?: string; message?: string };
+          handlers.onStatus?.(parsed);
+        } catch {
+          handlers.onError?.('invalid status payload');
+        }
+        break;
       case 'ping':
         break;
       case 'done':
         finished = true;
-        handlers.onDone?.();
+        try {
+          const parsed = data?.trim()
+            ? (JSON.parse(data) as {
+                botPaused?: boolean;
+                suggestTicket?: boolean;
+                intent?: string;
+                grounded?: boolean;
+              })
+            : {};
+          handlers.onDone?.(parsed);
+        } catch {
+          handlers.onDone?.();
+        }
         cleanup();
         break;
       case 'stream_error':
@@ -248,6 +311,7 @@ export function connectResilientSse(options: ResilientSseOptions): () => void {
         method: 'GET',
         mode: 'cors',
         credentials: 'omit',
+        headers: getHeaders?.() || {},
         signal,
       });
     } catch (e) {

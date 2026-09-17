@@ -5,157 +5,115 @@ import {
   Res,
   Post,
   Body,
-  UploadedFile,
-  UseInterceptors,
   Param,
   Delete,
   Patch,
   Req,
-  Header,
+  ForbiddenException,
 } from '@nestjs/common';
-import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { AppService } from './app.service';
 import { SseStreamService } from './sse/sse-stream.service';
+import { Public } from './auth/roles.decorator';
+import { CurrentUser } from './auth/current-user.decorator';
+import type { AuthUser } from './auth/auth.types';
+import { CsService } from './cs/cs.service';
 
 @Controller()
 export class AppController {
   constructor(
     private readonly appService: AppService,
     private readonly sseStreamService: SseStreamService,
+    private readonly csService: CsService,
   ) {}
 
+  @Public()
   @Get()
   getHello(): string {
     return this.appService.getHello();
   }
 
-  @Get('prompt')
-  async prompt(@Query('message') msg: string): Promise<string> {
-    return await this.appService.prompt(msg);
-  }
-
-  @Get('rag')
-  async rag(@Query('query') query: string): Promise<any> {
-    const response = await this.appService.rag(query);
-    return response;
-  }
-
   /**
-   * 可恢复 SSE：?query= 开新流；?streamId= 续传；Last-Event-ID 或 ?lastEventId= 断点
+   * 可恢复 SSE：仅订阅已有 streamId（由 POST /cs/stream/start 创建）。
+   * Last-Event-ID 或 ?lastEventId= 用于断点续传。
    */
   @Get('sse/stream')
   async sseStream(
     @Req() req: Request,
     @Res() res: Response,
-    @Query('query') query?: string,
+    @CurrentUser() user: AuthUser,
     @Query('streamId') streamId?: string,
   ): Promise<void> {
-    await this.sseStreamService.handleStream(req, res, { query, streamId });
+    await this.sseStreamService.handleStream(req, res, {
+      streamId,
+      userId: user.id,
+    });
   }
 
   @Get('sse/session/:sessionId/stream')
   async sseSessionStream(
     @Req() req: Request,
     @Res() res: Response,
+    @CurrentUser() user: AuthUser,
     @Param('sessionId') sessionId: string,
-    @Query('query') query?: string,
     @Query('streamId') streamId?: string,
   ): Promise<void> {
+    await this.csService.assertCanAccessSession(sessionId, user);
     await this.sseStreamService.handleStream(req, res, {
-      query,
       sessionId,
       streamId,
+      userId: user.id,
     });
   }
 
-  @Get('medical/history')
-  async medicalHistory(@Query('limit') limit?: string) {
-    return await this.appService.listMedicalHistory(
-      limit ? parseInt(limit, 10) : undefined,
-    );
-  }
-
-  @Post('medical')
-  @UseInterceptors(FileInterceptor('image'))
-  async medical(
-    @UploadedFile() file: any,
-    @Body('question') question: string,
-    @Res() res: Response,
-  ) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    try {
-      const fileBuffer = file?.buffer ? file.buffer : Buffer.alloc(0);
-      const result = await this.appService.medicalAnalysis(
-        fileBuffer,
-        question,
-      );
-      return res.json({
-        answer: result.content,
-        reasoning: result.reasoning,
-      });
-    } catch (err) {
-      return res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : '处理失败' });
-    }
-  }
-
-  /**
-   * 医疗流：multipart 提交后返回 streamId，前端用 EventSource 订阅 GET /sse/stream?streamId=
-   */
-  @Post('medical/stream/start')
-  @Header('Access-Control-Allow-Origin', '*')
-  @UseInterceptors(FileInterceptor('image'))
-  async medicalStreamStart(
-    @UploadedFile() file: any,
-    @Body('question') question: string,
-    @Body('rawQuestion') rawQuestion: string | undefined,
-    @Body('sessionId') sessionId: string | undefined,
-  ) {
-    const streamId = randomUUID();
-    const fileBuffer = file?.buffer ? file.buffer : Buffer.alloc(0);
-    this.sseStreamService.startMedicalStream(streamId, {
-      fileBuffer,
-      question: question ?? '',
-      rawQuestion: rawQuestion ?? question ?? '',
-      sessionId,
-    });
-    return { streamId };
-  }
-
-  // Sessions API - 后端持久化对话会话
   @Get('sessions')
-  async listSessions() {
-    const sessions = await this.appService.listSessions();
+  async listSessions(@CurrentUser() user: AuthUser, @Query('kind') kind?: string) {
+    const sessions = await this.appService.listSessions(
+      kind,
+      user.role === 'agent' ? undefined : user.id,
+    );
     return sessions.map((s) => ({
       id: s.id,
       title: s.title,
-      // MemoryService.listSessions() 提供的是 messageCount，而不是 messages
+      kind: s.kind,
+      intent: s.intent,
+      userId: s.userId,
+      botPaused: s.botPaused,
       messageCount: s.messageCount,
+      lastMessage: s.lastMessage || '',
+      lastSender: s.lastSender || null,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
     }));
   }
 
   @Post('sessions')
-  async createSession(@Body('title') title: string) {
-    const s = await this.appService.createSession(title);
-    return s;
+  async createSession(
+    @CurrentUser() user: AuthUser,
+    @Body('title') title: string,
+    @Body('kind') kind?: string,
+  ) {
+    return await this.appService.createSession(title, kind, user.id);
   }
 
   @Get('sessions/:id')
-  async getSession(@Param('id') id: string) {
+  async getSession(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.csService.assertCanAccessSession(id, user);
     const s = await this.appService.getSession(id);
     if (!s) return { error: 'not_found' };
     return s;
   }
 
   @Post('sessions/:id/messages')
-  async appendMessage(@Param('id') id: string, @Body() body: any) {
-    // body can contain { content } or { sender, text, timestamp? }
-    // Map content -> text, default sender to 'user' if not provided
+  async appendMessage(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    await this.csService.assertCanAccessSession(id, user);
+    if (user.role !== 'agent' && body?.sender === 'agent') {
+      throw new ForbiddenException('客户不能以坐席身份发消息');
+    }
     const msg = {
       sender: body.sender || 'user',
       text: body.text || body.content,
@@ -167,14 +125,20 @@ export class AppController {
   }
 
   @Patch('sessions/:id')
-  async updateSession(@Param('id') id: string, @Body('title') title: string) {
+  async updateSession(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body('title') title: string,
+  ) {
+    await this.csService.assertCanAccessSession(id, user);
     const s = await this.appService.updateSessionTitle(id, title);
     if (!s) return { error: 'not_found' };
     return s;
   }
 
   @Delete('sessions/:id')
-  async deleteSession(@Param('id') id: string) {
+  async deleteSession(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.csService.assertCanAccessSession(id, user);
     const ok = await this.appService.deleteSession(id);
     return { ok };
   }
