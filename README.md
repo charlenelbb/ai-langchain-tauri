@@ -5,21 +5,42 @@
 
 ## 主要功能
 
+- **双角色界面**
+  - 客户：在线咨询（会话列表 + 对话，不展示检索过程与来源）
+  - 坐席：工作台（工单队列、会话时间线、工单详情）与知识库
+
 - **智能客服**
   - 多轮会话（新建、切换、重命名、删除）
-  - 基于知识库 `kbId=customer-service` 的检索后生成，回答带来源引用
+  - 基于知识库 `kbId=customer-service` 检索后作答：高频 FAQ 摘录秒回，其余用 qwen-flash 无思考流式
   - 意图分类：售前 / 售后 / 投诉 / 其他
-  - 知识库未命中或投诉时，可一键创建本地工单（待处理 → 处理中 → 已结案）
-  - 登录鉴权：客户只看自己的会话/工单，坐席可认领工单并在同一时间线回复；转人工后机器人暂停
-  - 可恢复 SSE 流式输出；常见 FAQ 改写成短答，其余用 qwen-flash 无思考流式
+  - 客户点「转人工」即建单并暂停机器人；转人工后客户仍可继续留言
+  - 登录鉴权：客户只看自己的会话；坐席从待领取认领后，在同一时间线对客回复
+  - 可恢复 SSE 流式输出
   - 示例 FAQ：`servers/my-llm-server/fixtures/customer-service-faq.md`
 
-- **知识库**
+- **知识库**（坐席）
   - 文本与 Word（`.docx`）入库：切分 + 向量化 + 写入 pgvector
-  - 向量检索测试
+  - 检索预览；来源与距离仅在坐席侧「检索依据」展示
   - Embedding 使用 DashScope `text-embedding-v4`
   - 入库按 `##` / `###` 标题切块，过长段再按约 400 字切分；切分规则变更后需重新上传文档覆盖旧块
-![logo](./clients/my-ai-app/public/rag.png)
+
+## 界面
+
+登录（客户 / 坐席 Tab）
+
+![登录](./clients/my-ai-app/public/login.png)
+
+客户在线咨询
+
+![客户咨询](./clients/my-ai-app/public/customer.png)
+
+坐席工作台
+
+![坐席工作台](./clients/my-ai-app/public/agent.png)
+
+知识库
+
+![知识库](./clients/my-ai-app/public/kb.png)
 
 ## 项目亮点
 
@@ -39,6 +60,8 @@
 ├─ pnpm-workspace.yaml
 └─ README.md
 ```
+
+根目录 `.gitignore` 已忽略 `dist`、Postgres 数据目录、Tauri 构建产物（`src-tauri/target`、`src-tauri/gen`）。
 
 ## 快速开始
 
@@ -100,10 +123,11 @@ CS_MAX_COSINE_DISTANCE=0.55
 
 1. 启动 Postgres（含 pgvector）与后端、前端。
 2. 在 `servers/my-llm-server` 执行 `npx prisma migrate deploy`（或 `migrate dev`）。
-3. 打开应用先登录。演示账号：客户 `customer / demo123`，坐席 `agent / demo123`（知识库入库仅坐席）。
+3. 打开应用，分别用客户 `customer / demo123`、坐席 `agent / demo123` 登录。
 4. 坐席打开「知识库」，确认 kbId 为 `customer-service`，上传 FAQ 并入库。切分规则变更后请再传一次覆盖旧块。
-5. 客户打开「智能客服」，提问例如「7 天无理由怎么退货？」「多久发货」。未命中或投诉可一键建单（建单后机器人暂停）。
-6. 坐席在工单中点「认领并转人工」，在同一会话里用「坐席回复」对客，机器人不会再抢答。
+5. 客户在「在线咨询」提问，或点 chips（怎么退货 / 多久发货 / 怎么开发票）。
+6. 需要人工时点「转人工」建单并暂停机器人；客户之后仍可继续留言。
+7. 坐席在「待领取」认领工单，在同一会话里回复客户。
 
 ## 说明
 
