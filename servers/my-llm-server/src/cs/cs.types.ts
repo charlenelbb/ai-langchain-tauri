@@ -4,6 +4,14 @@ export function getCsTextModel(): string {
   return (process.env.CS_TEXT_MODEL || 'qwen-flash').trim() || 'qwen-flash';
 }
 
+export function getCsFallbackModel(): string | null {
+  const raw = (process.env.CS_FALLBACK_MODEL ?? 'qwen-plus').trim();
+  if (!raw) return null;
+  const primary = getCsTextModel();
+  if (raw === primary) return null;
+  return raw;
+}
+
 /** LangChain pgvector cosine 返回距离：越小越相近。超过该阈值视为未命中。 */
 export const CS_MAX_COSINE_DISTANCE = Number(
   process.env.CS_MAX_COSINE_DISTANCE ?? 0.55,

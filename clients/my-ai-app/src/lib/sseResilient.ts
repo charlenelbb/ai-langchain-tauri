@@ -26,6 +26,7 @@ export type ResilientSseHandlers = {
     suggestTicket?: boolean;
     intent?: string;
     grounded?: boolean;
+    cancelled?: boolean;
   }) => void;
   onError?: (message: string) => void;
   onRetry?: (attempt: number, delayMs: number) => void;
@@ -231,6 +232,7 @@ export function connectResilientSse(options: ResilientSseOptions): () => void {
                 suggestTicket?: boolean;
                 intent?: string;
                 grounded?: boolean;
+                cancelled?: boolean;
               })
             : {};
           handlers.onDone?.(parsed);

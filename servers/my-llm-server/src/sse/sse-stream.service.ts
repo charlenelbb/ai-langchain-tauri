@@ -1,7 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter } from 'events';
 import type { Request, Response } from 'express';
 import { CsService } from '../cs/cs.service';
+import { USER_CANCEL_REASON, isUserCancel } from '../fundamentals/llm-retry';
+import { StreamIdempotencyStore } from './stream-idempotency';
 
 export type SseEventRecord = {
   id: number;
@@ -17,6 +23,8 @@ type StreamState = {
   seq: number;
   emitter: EventEmitter;
   done: boolean;
+  cancelled: boolean;
+  upstream: AbortController;
 };
 
 /**
@@ -27,6 +35,7 @@ export class SseStreamService {
   private readonly streams = new Map<string, StreamState>();
   private readonly maxBuffered = 5000;
   private readonly streamTtlMs = 5 * 60 * 1000;
+  readonly idempotency = new StreamIdempotencyStore();
 
   constructor(private readonly csService: CsService) {}
 
@@ -99,6 +108,8 @@ export class SseStreamService {
       seq: 0,
       emitter: new EventEmitter(),
       done: false,
+      cancelled: false,
+      upstream: new AbortController(),
     };
   }
 
@@ -115,6 +126,25 @@ export class SseStreamService {
     }
     state.emitter.emit('event', ev);
     return ev;
+  }
+
+  getStream(streamId: string): StreamState | undefined {
+    return this.streams.get(streamId);
+  }
+
+  cancelStream(streamId: string, userId: string): { ok: true; cancelled: true } {
+    const state = this.streams.get(streamId);
+    if (!state) {
+      throw new NotFoundException('stream_not_found');
+    }
+    if (state.userId && state.userId !== userId) {
+      throw new ForbiddenException('stream_forbidden');
+    }
+    state.cancelled = true;
+    if (!state.upstream.signal.aborted) {
+      state.upstream.abort(USER_CANCEL_REASON);
+    }
+    return { ok: true, cancelled: true };
   }
 
   /**
@@ -154,6 +184,11 @@ export class SseStreamService {
           kbId: opts.kbId,
         });
 
+        if (state.cancelled) {
+          this.pushCancelled(state);
+          return;
+        }
+
         this.pushEvent(
           state,
           'intent',
@@ -171,7 +206,10 @@ export class SseStreamService {
         );
 
         let fullContent = '';
-        for await (const item of this.csService.streamAnswer(prepared)) {
+        for await (const item of this.csService.streamAnswer(prepared, {
+          signal: state.upstream.signal,
+        })) {
+          if (state.cancelled) break;
           if (item.type === 'chunk') fullContent += item.chunk;
           this.pushEvent(
             state,
@@ -180,20 +218,29 @@ export class SseStreamService {
           );
         }
 
-        if (opts.sessionId) {
+        if (state.cancelled) {
+          this.pushCancelled(state);
+          return;
+        }
+
+        if (opts.sessionId && !state.cancelled) {
           await this.csService.persistTurn({
             sessionId: opts.sessionId,
             question,
             answer: fullContent,
             prepared,
           });
-          if (prepared.wantHandoff) {
+          if (prepared.wantHandoff && !state.cancelled) {
             await this.csService.applyHandoffAfterTurn({
               sessionId: opts.sessionId,
               userId: opts.userId,
               question,
             });
           }
+        }
+        if (state.cancelled) {
+          this.pushCancelled(state);
+          return;
         }
 
         this.pushEvent(
@@ -208,12 +255,25 @@ export class SseStreamService {
           }),
         );
       } catch (e) {
+        if (state.cancelled || isUserCancel(e, state.upstream.signal)) {
+          state.cancelled = true;
+          this.pushCancelled(state);
+          return;
+        }
         const msg = e instanceof Error ? e.message : String(e);
         this.pushEvent(state, 'stream_error', JSON.stringify({ error: msg }));
       } finally {
         this.finalizeStream(state);
       }
     })();
+  }
+
+  private pushCancelled(state: StreamState): void {
+    this.pushEvent(
+      state,
+      'done',
+      JSON.stringify({ ok: true, cancelled: true }),
+    );
   }
 
   private finalizeStream(state: StreamState): void {

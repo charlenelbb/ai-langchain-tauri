@@ -10,15 +10,10 @@ import { RagService } from '../rag.service';
 import { MemoryService, SESSION_KIND_CS } from '../memory.service';
 import { PrismaService } from '../prisma.service';
 import {
-  callDashScopeChatComplete,
-  callDashScopeChatStream,
-  getDashScopeApiKey,
-  getDashScopeBaseUrl,
-} from '../fundamentals/dashscope-chat';
-import {
   CS_INTENTS,
   CS_KB_ID,
   CS_MAX_COSINE_DISTANCE,
+  getCsFallbackModel,
   getCsTextModel,
   isCsIntent,
   isTicketStatus,
@@ -27,6 +22,7 @@ import {
   type CsPrepareResult,
   type TicketStatus,
 } from './cs.types';
+import { rewriteWithModelFallback, streamWithModelFallback } from './cs-llm';
 import {
   HANDOFF_CONFIRM,
   REFUSE_MESSAGE,
@@ -203,6 +199,7 @@ export class CsService {
 
   async *streamAnswer(
     prepared: CsPrepareResult,
+    options?: { signal?: AbortSignal },
   ): AsyncGenerator<{ type: 'thinking' | 'chunk'; chunk: string }, void, unknown> {
     if (prepared.wantHandoff) {
       this.logger.log('CS answer path=handoff');
@@ -215,37 +212,24 @@ export class CsService {
       return;
     }
 
+    const snippetFallback = rewriteFromSnippets(prepared.question, prepared.citations);
+    const primaryModel = getCsTextModel();
+    const fallbackModel = getCsFallbackModel();
+
     if (shouldExtractiveAnswer(prepared)) {
       this.logger.log('CS answer path=extractive-rewrite');
-      const fallback = rewriteFromSnippets(prepared.question, prepared.citations);
-      try {
-        const rewritten = await callDashScopeChatComplete({
-          model: getCsTextModel(),
-          enableThinking: false,
-          timeoutMs: 8000,
-          messages: [
-            {
-              role: 'system',
-              content:
-                '你是客服。只用摘录改写成一两句口语短答，禁止编造数字和政策。不要重复无关条款。',
-            },
-            {
-              role: 'user',
-              content: `问题：${prepared.question}\n摘录：\n${prepared.citations
-                .slice(0, 2)
-                .map((c) => c.snippet)
-                .join('\n')}`,
-            },
-          ],
-        });
-        yield { type: 'chunk', chunk: rewritten || fallback };
-      } catch {
-        yield { type: 'chunk', chunk: fallback };
-      }
+      const rewritten = await rewriteWithModelFallback({
+        prepared,
+        snippetFallback,
+        primaryModel,
+        fallbackModel,
+        signal: options?.signal,
+      });
+      yield { type: 'chunk', chunk: rewritten };
       return;
     }
 
-    this.logger.log(`CS answer path=llm model=${getCsTextModel()}`);
+    this.logger.log(`CS answer path=llm model=${primaryModel} fallback=${fallbackModel || '-'}`);
 
     const excerpts = prepared.citations
       .map(
@@ -258,18 +242,16 @@ export class CsService {
       ? `对话历史：\n${prepared.historyContext}\n\n当前问题：${prepared.question}`
       : prepared.question;
 
-    const apiKey = getDashScopeApiKey();
-    const baseUrl = getDashScopeBaseUrl();
-    yield* callDashScopeChatStream(
-      apiKey,
-      baseUrl,
-      [
+    yield* streamWithModelFallback({
+      messages: [
         { role: 'system', content: buildCsSystemPrompt(prepared.intent, excerpts) },
         { role: 'user', content: userContent },
       ],
-      getCsTextModel(),
-      { enableThinking: false },
-    );
+      primaryModel,
+      fallbackModel,
+      snippetFallback,
+      signal: options?.signal,
+    });
   }
 
   async persistTurn(options: {

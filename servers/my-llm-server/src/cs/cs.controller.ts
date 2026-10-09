@@ -35,7 +35,15 @@ export class CsController {
     @Body('question') question: string,
     @Body('sessionId') sessionId?: string,
     @Body('kbId') kbId?: string,
+    @Body('idempotencyKey') idempotencyKey?: string,
   ) {
+    const key = idempotencyKey?.trim();
+    if (key) {
+      const existing = this.sseStreamService.idempotency.get(user.id, key);
+      if (existing) {
+        return { streamId: existing };
+      }
+    }
     if (!assertRateLimit(`stream:${user.id}`, 20, 60_000)) {
       throw new HttpException('提问过于频繁，请稍后再试', HttpStatus.TOO_MANY_REQUESTS);
     }
@@ -46,6 +54,9 @@ export class CsController {
       }
     }
     const streamId = randomUUID();
+    if (key) {
+      this.sseStreamService.idempotency.set(user.id, key, streamId);
+    }
     this.sseStreamService.startCustomerServiceStream(streamId, {
       question: question ?? '',
       sessionId,
@@ -53,6 +64,14 @@ export class CsController {
       userId: user.id,
     });
     return { streamId };
+  }
+
+  @Post('stream/:streamId/cancel')
+  cancelStream(
+    @CurrentUser() user: AuthUser,
+    @Param('streamId') streamId: string,
+  ) {
+    return this.sseStreamService.cancelStream(streamId, user.id);
   }
 
   @Post('tickets')

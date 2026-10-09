@@ -117,6 +117,8 @@ CS_MAX_COSINE_DISTANCE=0.55
 
 # 可选：客服作答模型（默认 qwen-flash；需要更稳表达可改为 qwen3-max）
 # CS_TEXT_MODEL=qwen-flash
+# 可选：主模型无输出时的备用模型（默认 qwen-plus；与主模型相同则跳过）
+# CS_FALLBACK_MODEL=qwen-plus
 ```
 
 ## 演示步骤

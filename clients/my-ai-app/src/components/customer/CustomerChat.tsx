@@ -33,6 +33,8 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
 
   const sseStopRef = useRef<(() => void) | null>(null);
   const sessionsReqRef = useRef(0);
+  const activeStreamIdRef = useRef<string | null>(null);
+  const localUserMsgIdRef = useRef<string | null>(null);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId);
   const botPaused = Boolean(currentSession?.botPaused);
@@ -51,6 +53,13 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
     return () => {
       sseStopRef.current?.();
       sseStopRef.current = null;
+      const streamId = activeStreamIdRef.current;
+      activeStreamIdRef.current = null;
+      if (streamId) {
+        void authFetch(`/cs/stream/${encodeURIComponent(streamId)}/cancel`, {
+          method: 'POST',
+        });
+      }
     };
   }, []);
 
@@ -137,8 +146,36 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
     setSuggestTicket(false);
   };
 
+  const abortUpstreamOnly = useCallback(async () => {
+    const streamId = activeStreamIdRef.current;
+    sseStopRef.current?.();
+    sseStopRef.current = null;
+    activeStreamIdRef.current = null;
+    if (streamId) {
+      try {
+        await authFetch(`/cs/stream/${encodeURIComponent(streamId)}/cancel`, {
+          method: 'POST',
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  const cancelActiveStream = useCallback(async () => {
+    await abortUpstreamOnly();
+    const localId = localUserMsgIdRef.current;
+    if (localId) {
+      setSessionMessages((prev) => prev.filter((m) => m.id !== localId));
+      localUserMsgIdRef.current = null;
+    }
+    setLiveAnswer('');
+    setStreamingStatus('idle');
+    setIsLoading(false);
+  }, [abortUpstreamOnly]);
+
   const handleNewConversation = useCallback(async () => {
-    if (isLoading) return;
+    await cancelActiveStream();
     try {
       const res = await authFetch('/sessions', {
         method: 'POST',
@@ -156,10 +193,10 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
     }
     setQuestion('');
     resetLive();
-  }, [isLoading, loadSessions]);
+  }, [cancelActiveStream, loadSessions]);
 
   const switchSession = (sessionId: string) => {
-    if (isLoading) return;
+    void cancelActiveStream();
     setCurrentSessionId(sessionId);
     const found = sessions.find((s) => s.id === sessionId);
     setIntent(found?.intent || null);
@@ -203,13 +240,40 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
 
   async function sendToBot(sessionId: string, raw: string) {
     setStreamingStatus('retrieving');
-    sseStopRef.current?.();
-    sseStopRef.current = null;
+    await abortUpstreamOnly();
+    setIsLoading(true);
+    setStreamingStatus('retrieving');
 
-    const res = await authFetch('/cs/stream/start', {
-      method: 'POST',
-      body: JSON.stringify({ question: raw, sessionId, kbId: CS_KB_ID }),
-    });
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `idem_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const payload = {
+      question: raw,
+      sessionId,
+      kbId: CS_KB_ID,
+      idempotencyKey,
+    };
+
+    let res: Response | null = null;
+    try {
+      res = await authFetch('/cs/stream/start', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      try {
+        res = await authFetch('/cs/stream/start', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      } catch (e) {
+        setStreamingStatus('error');
+        setErrorMessage(e instanceof Error ? e.message : '无法开启客服流');
+        setIsLoading(false);
+        return;
+      }
+    }
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
       setStreamingStatus('error');
@@ -225,6 +289,7 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
       return;
     }
 
+    activeStreamIdRef.current = body.streamId;
     sseStopRef.current = connectResilientSse({
       baseUrl: API_BASE,
       initialStreamId: body.streamId,
@@ -253,6 +318,14 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
           }
         },
         onDone: (payload) => {
+          activeStreamIdRef.current = null;
+          localUserMsgIdRef.current = null;
+          if (payload?.cancelled) {
+            setStreamingStatus('idle');
+            setLiveAnswer('');
+            setIsLoading(false);
+            return;
+          }
           setStreamingStatus('done');
           if (payload?.suggestTicket) setSuggestTicket(true);
           if (payload?.botPaused) {
@@ -265,12 +338,14 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
           setIsLoading(false);
         },
         onError: (msg) => {
+          activeStreamIdRef.current = null;
           setStreamingStatus('error');
           setErrorMessage(msg);
           void loadSessionMessages(sessionId);
           setIsLoading(false);
         },
         onGiveUp: () => {
+          activeStreamIdRef.current = null;
           setStreamingStatus('error');
           setErrorMessage('连接多次失败，已停止重试');
           setIsLoading(false);
@@ -285,9 +360,11 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
     const sessionId = await ensureSession();
     if (!sessionId) return;
 
+    const localId = 'local_user_' + Date.now();
+    localUserMsgIdRef.current = localId;
     setSessionMessages((prev) => [
       ...prev,
-      { id: 'local_user_' + Date.now(), sender: 'user', text: raw },
+      { id: localId, sender: 'user', text: raw },
     ]);
     setQuestion('');
     setIsLoading(true);
@@ -370,7 +447,6 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
         <SessionList
           sessions={sessions}
           currentId={currentSessionId}
-          disabled={isLoading}
           onSelect={switchSession}
           onNew={() => void handleNewConversation()}
           onRename={(s) => setRenameDialog({ id: s.id, title: s.title })}
@@ -431,8 +507,10 @@ const CustomerChat: React.FC<{ user: AuthUser; onLogout: () => void }> = ({
             value={question}
             onChange={setQuestion}
             onSubmit={() => void handleSubmit()}
+            onStop={() => void cancelActiveStream()}
+            busy={isLoading && !botPaused}
             placeholder={botPaused ? '给坐席留言…' : '描述你的问题，例如：7 天无理由怎么退货？'}
-            disabled={isLoading}
+            disabled={false}
             busyLabel="回复中…"
           />
         </main>

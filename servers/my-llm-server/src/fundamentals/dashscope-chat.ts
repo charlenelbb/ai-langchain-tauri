@@ -2,6 +2,13 @@
  * 百炼（DashScope）OpenAI 兼容聊天：非流式 JSON 与 SSE 流式共用。
  */
 
+import {
+  LlmHttpError,
+  UserCancelError,
+  isUserCancel,
+  linkTimeoutSignal,
+} from './llm-retry';
+
 export type DashScopeChatMessage = {
   role: string;
   content: string | Array<{ image?: string; text?: string }>;
@@ -29,18 +36,26 @@ export function toCompatibleChatUrl(baseUrl: string): string {
   return `${host}/compatible-mode/v1/chat/completions`;
 }
 
+function rethrowAbort(err: unknown, signal?: AbortSignal): never {
+  if (isUserCancel(err, signal)) {
+    throw new UserCancelError();
+  }
+  throw err;
+}
+
 export async function callDashScopeChatComplete(options: {
   messages: DashScopeChatMessage[];
   model: string;
   enableThinking?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const apiKey = getDashScopeApiKey();
   const baseUrl = getDashScopeBaseUrl();
   const url = toCompatibleChatUrl(baseUrl);
-  const timeoutMs = options.timeoutMs ?? 45000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutMs =
+    options.timeoutMs ?? Number(process.env.DASHSCOPE_NONSTREAM_TIMEOUT_MS ?? 45000);
+  const linked = linkTimeoutSignal(timeoutMs, options.signal);
 
   try {
     const resp = await fetch(url, {
@@ -55,7 +70,7 @@ export async function callDashScopeChatComplete(options: {
         stream: false,
         enable_thinking: options.enableThinking ?? false,
       }),
-      signal: controller.signal,
+      signal: linked.signal,
     });
 
     const raw = await resp.text();
@@ -68,17 +83,19 @@ export async function callDashScopeChatComplete(options: {
       }
     }
     if (!resp.ok) {
-      throw new Error(
+      const message =
         json?.error?.message ||
-          json?.message ||
-          `DashScope 请求失败: ${resp.status} ${resp.statusText}\n${raw.slice(0, 300)}`,
-      );
+        json?.message ||
+        `DashScope 请求失败: ${resp.status} ${resp.statusText}\n${raw.slice(0, 300)}`;
+      throw new LlmHttpError(resp.status, message);
     }
     const content = json?.choices?.[0]?.message?.content;
     if (typeof content === 'string' && content.trim()) return content.trim();
     throw new Error('DashScope 响应中无 content');
+  } catch (e) {
+    rethrowAbort(e, linked.signal);
   } finally {
-    clearTimeout(timer);
+    linked.cleanup();
   }
 }
 
@@ -91,7 +108,7 @@ export async function* callDashScopeChatStream(
   baseUrl: string,
   messages: DashScopeChatMessage[],
   model: string,
-  options?: { enableThinking?: boolean },
+  options?: { enableThinking?: boolean; signal?: AbortSignal },
 ): AsyncGenerator<DashScopeStreamChunk, void, unknown> {
   const url = toCompatibleChatUrl(baseUrl);
 
@@ -105,9 +122,9 @@ export async function* callDashScopeChatStream(
     requestBody.enable_thinking = true;
   }
 
-  const controller = new AbortController();
   const streamTimeoutMs = Number(process.env.DASHSCOPE_STREAM_TIMEOUT_MS ?? 180000);
-  const timer = setTimeout(() => controller.abort(), streamTimeoutMs);
+  const linked = linkTimeoutSignal(streamTimeoutMs, options?.signal);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   try {
     const resp = await fetch(url, {
@@ -117,17 +134,18 @@ export async function* callDashScopeChatStream(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+      signal: linked.signal,
     });
 
     if (!resp.ok) {
       const raw = await resp.text().catch(() => '');
-      throw new Error(
+      throw new LlmHttpError(
+        resp.status,
         `DashScope streaming 请求失败: ${resp.status} ${resp.statusText}\n${raw.slice(0, 300)}`,
       );
     }
 
-    const reader = (resp.body as any)?.getReader?.();
+    reader = resp.body?.getReader?.();
     if (!reader) {
       throw new Error('DashScope streaming: response.body 不可读取');
     }
@@ -137,6 +155,9 @@ export async function* callDashScopeChatStream(
     let done = false;
 
     while (!done) {
+      if (isUserCancel(undefined, linked.signal)) {
+        throw new UserCancelError();
+      }
       const { value, done: doneReading } = await reader.read();
       done = doneReading;
       if (value) buffer += decoder.decode(value, { stream: !doneReading });
@@ -182,7 +203,14 @@ export async function* callDashScopeChatStream(
         }
       }
     }
+  } catch (e) {
+    rethrowAbort(e, linked.signal);
   } finally {
-    clearTimeout(timer);
+    linked.cleanup();
+    try {
+      await reader?.cancel();
+    } catch {
+      /* ignore */
+    }
   }
 }
