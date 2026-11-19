@@ -1,0 +1,14 @@
+.git
+**/node_modules
+**/dist
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+**/postgresql_data
+**/src-tauri/target
+**/src-tauri/gen
+infra/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars

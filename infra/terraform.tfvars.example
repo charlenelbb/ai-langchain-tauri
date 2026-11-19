@@ -1,0 +1,4 @@
+region        = "cn-hongkong"
+project_name  = "ai-langchain"
+instance_type = "ecs.e-c1m2.large"
+ssh_cidr      = "0.0.0.0/0"

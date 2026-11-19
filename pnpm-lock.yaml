@@ -115,6 +115,9 @@ importers:
       mammoth:
         specifier: ^1.11.0
         version: 1.12.3
+      multer:
+        specifier: 2.0.2
+        version: 2.0.2
       pg:
         specifier: ^8.19.0
         version: 8.19.0
