@@ -1,0 +1,84 @@
+# SSE 状态在这一个进程的内存里。保持 1 个副本，并用 Recreate 避免更新时出现两个进程。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: ai-langchain
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/charlenelbb/ai-langchain-api:bootstrap
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: DASHSCOPE_BASE_URL
+              value: https://dashscope.aliyuncs.com/api/v1
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ai-langchain-env
+                  key: DATABASE_URL
+            - name: DASHSCOPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-langchain-env
+                  key: DASHSCOPE_API_KEY
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-langchain-env
+                  key: AUTH_SECRET
+            - name: CORS_ORIGIN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-langchain-env
+                  key: CORS_ORIGIN
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: ai-langchain
+spec:
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

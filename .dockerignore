@@ -9,6 +9,8 @@
 **/src-tauri/target
 **/src-tauri/gen
 infra/.terraform
+infra/.deploy-secrets
+infra/.ssh-key
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
