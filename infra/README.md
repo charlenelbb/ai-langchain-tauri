@@ -46,15 +46,16 @@ GitHub Actions 在推送到 `main` 时跑单测、构建镜像并推到 GHCR，�
 gh secret set ECS_SSH_KEY < infra/.ssh-key
 ```
 
-镜像仓库是 `ghcr.io/charlenelbb/ai-langchain-api` 和 `ghcr.io/charlenelbb/ai-langchain-web`。工作流会把这两个包设为公开，镜像里没有密钥。如果这一步失败，到 GitHub 的 Packages 页面把它们改成 Public，否则服务器拉不到镜像。
+镜像仓库是 `ghcr.io/charlenelbb/ai-langchain-api` 和 `ghcr.io/charlenelbb/ai-langchain-web`，保持私有。Actions 在运行器上拉取镜像，再通过 SSH 导入这台机器，然后才替换容器。镜像里没有密钥。
 
-手动发布某个已经推上去的提交：
+手动发布某个已经推上去的提交前，先登录 GHCR：
 
 ```bash
+gh auth token | docker login ghcr.io -u charlenelbb --password-stdin
 IMAGE_TAG=<commit sha> ./infra/deploy.sh
 ```
 
-脚本会先拉取镜像，拉取成功后才替换容器。用坐席账号登录，在知识库上传 FAQ 并入库后，客户才能正常提问。
+脚本会在本机拉取镜像并导入服务器，确认镜像存在后才替换容器。用坐席账号登录，在知识库上传 FAQ 并入库后，客户才能正常提问。
 
 ## 网络
 

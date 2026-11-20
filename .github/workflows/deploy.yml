@@ -62,20 +62,17 @@ jobs:
           tags: |
             ${{ env.WEB_IMAGE }}:${{ github.sha }}
             ${{ env.WEB_IMAGE }}:main
-      - name: Make images public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          for name in ai-langchain-api ai-langchain-web; do
-            gh api --method PATCH "/user/packages/container/${name}" -f visibility=public
-          done
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Roll out on the existing ECS
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy images onto the ECS and roll out
         env:
           SSH_KEY: ${{ secrets.ECS_SSH_KEY }}
         run: |
@@ -83,12 +80,19 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/ecs
           chmod 600 ~/.ssh/ecs
+          SHA="${{ github.sha }}"
+          docker pull "${API_IMAGE}:${SHA}"
+          docker pull "${WEB_IMAGE}:${SHA}"
+          docker save "${API_IMAGE}:${SHA}" "${WEB_IMAGE}:${SHA}" \
+            | ssh -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new "root@${ECS_HOST}" \
+              'k3s ctr images import -'
+          ssh -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new "root@${ECS_HOST}" \
+            "k3s ctr images ls | grep -F '${API_IMAGE}:${SHA}' && k3s ctr images ls | grep -F '${WEB_IMAGE}:${SHA}'"
           ssh -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new "root@${ECS_HOST}" "bash -s" <<EOF
           set -eu
-          k3s ctr images pull ${API_IMAGE}:${{ github.sha }}
-          k3s ctr images pull ${WEB_IMAGE}:${{ github.sha }}
-          kubectl -n ai-langchain set image deployment/api api=${API_IMAGE}:${{ github.sha }}
-          kubectl -n ai-langchain set image deployment/web web=${WEB_IMAGE}:${{ github.sha }}
+          export PATH="/usr/local/bin:\$PATH"
+          kubectl -n ai-langchain set image deployment/api api=${API_IMAGE}:${SHA}
+          kubectl -n ai-langchain set image deployment/web web=${WEB_IMAGE}:${SHA}
           kubectl -n ai-langchain rollout status deployment/api --timeout=180s
           kubectl -n ai-langchain rollout status deployment/web --timeout=180s
           EOF
