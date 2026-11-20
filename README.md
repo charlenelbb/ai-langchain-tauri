@@ -133,7 +133,19 @@ CS_MAX_COSINE_DISTANCE=0.55
 
 ## 部署到阿里云
 
-Web、API 和 Postgres 的 Terraform 在 [`infra/`](infra/README.md)。默认开在香港一台云服务器上，不需要域名和备案。桌面端仍在本机运行。
+网站跑在香港一台云服务器上，入口是 `http://charlenecloud.com`。服务器在香港，不需要备案。桌面端仍在本机运行。
+
+推送到 `main` 会自动发布：
+
+1. GitHub Actions 开始运行。
+2. 先跑 `pnpm --filter my-llm-server test:unit`。单测失败就停止，不会部署。
+3. 通过后构建两个私有镜像：`ghcr.io/charlenelbb/ai-langchain-api` 和 `ghcr.io/charlenelbb/ai-langchain-web`。
+4. Actions 经 SSH 把镜像导入这台机器上的 k3s。确认镜像已经在机器上，才替换正在运行的容器。
+5. API 始终只有 1 个副本。更新时先停掉旧进程，再启动新进程。线上由 Nginx 接收访问，转到这一个 API，数据库是带 pgvector 的 Postgres。
+
+![自动构建部署](./docs/deploy-flow.png)
+
+命令、密钥和第一次安装见 [`infra/README.md`](infra/README.md)。
 
 ## 说明
 
