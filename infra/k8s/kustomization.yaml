@@ -5,3 +5,4 @@ resources:
   - postgres.yaml
   - api.yaml
   - web.yaml
+  - ingress.yaml

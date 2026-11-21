@@ -41,7 +41,7 @@ echo "安装 k3s 并构建镜像"
 set -eu
 export PATH="/usr/local/bin:$PATH"
 if ! command -v k3s >/dev/null 2>&1; then
-  curl -sfL https://get.k3s.io | sh -s - --disable=traefik
+  curl -sfL https://get.k3s.io | sh -s -
 fi
 kubectl get nodes
 
@@ -115,6 +115,8 @@ kubectl -n ai-langchain rollout status deployment/api --timeout=180s
 docker compose -f /opt/ai-langchain/docker-compose.yml stop web || true
 kubectl apply -f /opt/ai-langchain/k8s/web.yaml
 kubectl -n ai-langchain rollout status deployment/web --timeout=180s
+bash /opt/ai-langchain/k8s/enable-traefik.sh
+kubectl apply -f /opt/ai-langchain/k8s/ingress.yaml
 EOF
 
 echo "k3s 已启动。确认网站可用后，再停掉旧的 API 和数据库容器。"

@@ -67,6 +67,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -88,11 +89,10 @@ jobs:
               'k3s ctr images import -'
           ssh -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new "root@${ECS_HOST}" \
             "k3s ctr images ls | grep -F '${API_IMAGE}:${SHA}' && k3s ctr images ls | grep -F '${WEB_IMAGE}:${SHA}'"
-          ssh -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new "root@${ECS_HOST}" "bash -s" <<EOF
-          set -eu
-          export PATH="/usr/local/bin:\$PATH"
-          kubectl -n ai-langchain set image deployment/api api=${API_IMAGE}:${SHA}
-          kubectl -n ai-langchain set image deployment/web web=${WEB_IMAGE}:${SHA}
-          kubectl -n ai-langchain rollout status deployment/api --timeout=180s
-          kubectl -n ai-langchain rollout status deployment/web --timeout=180s
-          EOF
+          ssh -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new "root@${ECS_HOST}" \
+            'mkdir -p /opt/ai-langchain/k8s'
+          scp -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new \
+            infra/k8s/*.yaml infra/k8s/*.sh \
+            "root@${ECS_HOST}:/opt/ai-langchain/k8s/"
+          ssh -i ~/.ssh/ecs -o StrictHostKeyChecking=accept-new "root@${ECS_HOST}" \
+            "API_IMAGE=${API_IMAGE}:${SHA} WEB_IMAGE=${WEB_IMAGE}:${SHA} bash /opt/ai-langchain/k8s/rollout.sh"

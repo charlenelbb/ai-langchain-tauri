@@ -36,7 +36,7 @@ terraform apply
 ./infra/k8s/bootstrap.sh
 ```
 
-脚本会安装 k3s（不启用 Traefik，不开放 6443）、在服务器上构建镜像、把现有 Compose 数据库导入 Kubernetes，再把网站切到 k3s。切换时网站会短暂停机。确认登录正常之前，不要删除原来的 Docker 卷。
+脚本会安装 k3s（启用 Traefik，不开放 6443）、在服务器上构建镜像、把现有 Compose 数据库导入 Kubernetes，再把网站切到 k3s。切换时网站会短暂停机。确认登录正常之前，不要删除原来的 Docker 卷。
 
 ## 4. 推送 main 即发布
 
@@ -55,7 +55,19 @@ gh auth token | docker login ghcr.io -u charlenelbb --password-stdin
 IMAGE_TAG=<commit sha> ./infra/deploy.sh
 ```
 
-脚本会在本机拉取镜像并导入服务器，确认镜像存在后才替换容器。用坐席账号登录，在知识库上传 FAQ 并入库后，客户才能正常提问。
+脚本会在本机拉取镜像并导入服务器，确认镜像存在后才替换容器。客服网页先改成只在集群内访问，腾出 80 端口，再启用 Traefik。Traefik 已经在跑时不会重启 k3s。本机如果有 `/Users/charlene/charlenecloud-home`，同一次发布会把它传到服务器。用坐席账号登录，在知识库上传 FAQ 并入库后，客户才能正常提问。
+
+## 同一域名按服务分路径
+
+客服只登记自己的路径：
+
+- 页面是 `http://charlenecloud.com/cs/`。
+- 接口是 `http://charlenecloud.com/api/cs/`。登录地址是 `http://charlenecloud.com/api/cs/auth/login`。
+- Traefik 去掉 `/api/cs` 后再转给现有 API。`/api/cs/sse/` 单独转发，等待响应头的上限是 300 秒，响应不缓冲。
+
+域名首页不在这个仓库。它在 `/Users/charlene/charlenecloud-home`，打开 `http://charlenecloud.com` 看到导航。第一次切换请在本机执行 `./infra/deploy.sh`，这样首页会和客服一起生效。只推送到 `main` 时，自动发布会更新客服；服务器上还没有 `/opt/portal` 的话，域名根路径暂时没有导航。
+
+新项目用自己的仓库，部署到同一台 k3s，并带上自己的 Ingress，例如页面 `/shop/`、接口 `/api/shop/`。然后只在首页项目的 `index.html` 加一个链接并重新应用。不要改客服仓库，也不要把别的服务放进客服 API。客服 API 仍然只有一个进程。本机和桌面端不使用这些前缀。
 
 ## 网络
 

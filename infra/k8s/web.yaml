@@ -22,7 +22,7 @@ spec:
               containerPort: 80
           readinessProbe:
             httpGet:
-              path: /
+              path: /cs/
               port: http
             periodSeconds: 10
           resources:
@@ -36,7 +36,6 @@ metadata:
   name: web
   namespace: ai-langchain
 spec:
-  type: LoadBalancer
   selector:
     app: web
   ports:

@@ -53,9 +53,10 @@ function buildStreamUrl(opts: {
   lastEventId: number;
 }): string {
   const path = opts.sessionId
-    ? `/sse/session/${encodeURIComponent(opts.sessionId)}/stream`
-    : '/sse/stream';
-  const u = new URL(path, opts.baseUrl.replace(/\/$/, '') + '/');
+    ? `sse/session/${encodeURIComponent(opts.sessionId)}/stream`
+    : 'sse/stream';
+  const base = opts.baseUrl.endsWith('/') ? opts.baseUrl : `${opts.baseUrl}/`;
+  const u = new URL(path, base);
   if (opts.streamId) {
     u.searchParams.set('streamId', opts.streamId);
     u.searchParams.set('lastEventId', String(opts.lastEventId));
