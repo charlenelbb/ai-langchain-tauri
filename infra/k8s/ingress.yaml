@@ -46,7 +46,7 @@ metadata:
   name: cs-api
   namespace: ai-langchain
   annotations:
-    traefik.ingress.kubernetes.io/router.middlewares: strip-api-cs@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: ai-langchain-strip-api-cs@kubernetescrd
     traefik.ingress.kubernetes.io/router.priority: "20"
 spec:
   ingressClassName: traefik
@@ -67,8 +67,8 @@ metadata:
   name: cs-sse
   namespace: ai-langchain
   annotations:
-    traefik.ingress.kubernetes.io/router.middlewares: strip-api-cs@kubernetescrd
-    traefik.ingress.kubernetes.io/service.serverstransport: sse@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: ai-langchain-strip-api-cs@kubernetescrd
+    traefik.ingress.kubernetes.io/service.serverstransport: ai-langchain-sse@kubernetescrd
     traefik.ingress.kubernetes.io/router.priority: "30"
 spec:
   ingressClassName: traefik
